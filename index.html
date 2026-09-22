@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Bounce Zero — Browser (PixiJS)</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="frame">
+        <div id="canvas-holder"></div>
+        <div id="touch-controls">
+          <div class="tc-left">
+            <button id="btn-left" aria-label="Left">◀</button>
+            <button id="btn-right" aria-label="Right">▶</button>
+          </div>
+          <div class="tc-right">
+            <button id="btn-jump" aria-label="Bounce">⬆</button>
+            <button id="btn-pause" aria-label="Pause">II</button>
+          </div>
+        </div>
+        <div id="hint">← → / A D move · Space / ↑ bounce · Enter select · P pause · L+R cheat</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

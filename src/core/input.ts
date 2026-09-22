@@ -1,0 +1,54 @@
+// Keyboard + touch input, PSP_CTRL_* compatible edge detection
+export const BTN = { Left: 1, Right: 2, Up: 4, Jump: 4, Cross: 8, Start: 16, Circle: 32, L: 64, R: 128, Down: 256 };
+export class Input {
+  heldMask = 0;
+  private pressed = new Set<number>();
+  private released = new Set<number>();
+  private keyMap = new Map<string, number>();
+  cheatArmedR = false;
+  constructor() {
+    this.keyMap.set('arrowleft', BTN.Left); this.keyMap.set('a', BTN.Left);
+    this.keyMap.set('arrowright', BTN.Right); this.keyMap.set('d', BTN.Right);
+    this.keyMap.set('arrowup', BTN.Up); this.keyMap.set('w', BTN.Up);
+    this.keyMap.set('arrowdown', BTN.Down); this.keyMap.set('s', BTN.Down);
+    this.keyMap.set(' ', BTN.Cross);
+    this.keyMap.set('enter', BTN.Cross); this.keyMap.set('z', BTN.Cross);
+    this.keyMap.set('escape', BTN.Circle); this.keyMap.set('x', BTN.Circle);
+    this.keyMap.set('p', BTN.Start);
+    this.keyMap.set('q', BTN.L); this.keyMap.set('e', BTN.R);
+    window.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      const b = this.keyMap.get(k);
+      if (b === undefined) return;
+      if (k === ' ' || k.startsWith('arrow')) e.preventDefault();
+      if (!(this.heldMask & b)) this.pressed.add(b);
+      this.heldMask |= b;
+    });
+    window.addEventListener('keyup', (e) => {
+      const b = this.keyMap.get(e.key.toLowerCase());
+      if (b === undefined) return;
+      this.heldMask &= ~b;
+      this.released.add(b);
+    });
+    this.bindTouch('btn-left', BTN.Left);
+    this.bindTouch('btn-right', BTN.Right);
+    this.bindTouch('btn-jump', BTN.Cross);
+    this.bindTouch('btn-pause', BTN.Start);
+  }
+  private bindTouch(id: string, btn: number) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const down = (e: Event) => { e.preventDefault(); if (!(this.heldMask & btn)) this.pressed.add(btn); this.heldMask |= btn; };
+    const up = (e: Event) => { e.preventDefault(); this.heldMask &= ~btn; this.released.add(btn); };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('pointerleave', up);
+  }
+  held(b: number) { return (this.heldMask & b) !== 0; }
+  consumePressed(b: number) { if (this.pressed.has(b)) { this.pressed.delete(b); return true; } return false; }
+  consumeReleased(b: number) { if (this.released.has(b)) { this.released.delete(b); return true; } return false; }
+  pressedNow(b: number) { return this.pressed.has(b); }
+  endFrame() { this.pressed.clear(); this.released.clear(); }
+  resetEdges() { this.pressed.clear(); this.released.clear(); }
+}
