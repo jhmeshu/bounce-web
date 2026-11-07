@@ -12,20 +12,39 @@ export class Input {
     this.keyMap.set('arrowup', BTN.Up); this.keyMap.set('w', BTN.Up);
     this.keyMap.set('arrowdown', BTN.Down); this.keyMap.set('s', BTN.Down);
     this.keyMap.set(' ', BTN.Cross);
+    this.keyMap.set('space', BTN.Cross);
+    this.keyMap.set('spacebar', BTN.Cross);
     this.keyMap.set('enter', BTN.Cross); this.keyMap.set('z', BTN.Cross);
     this.keyMap.set('escape', BTN.Circle); this.keyMap.set('x', BTN.Circle);
     this.keyMap.set('p', BTN.Start);
     this.keyMap.set('q', BTN.L); this.keyMap.set('e', BTN.R);
     window.addEventListener('keydown', (e) => {
       const k = e.key.toLowerCase();
-      const b = this.keyMap.get(k);
+      let b = this.keyMap.get(k);
+      if (b === undefined) {
+        if (e.code === 'Space') b = BTN.Cross;
+        else if (e.code === 'ArrowUp' || e.code === 'KeyW') b = BTN.Up;
+        else if (e.code === 'ArrowLeft' || e.code === 'KeyA') b = BTN.Left;
+        else if (e.code === 'ArrowRight' || e.code === 'KeyD') b = BTN.Right;
+        else if (e.code === 'ArrowDown' || e.code === 'KeyS') b = BTN.Down;
+        else if (e.code === 'Enter' || e.code === 'KeyZ') b = BTN.Cross;
+      }
       if (b === undefined) return;
-      if (k === ' ' || k.startsWith('arrow')) e.preventDefault();
+      if (k === ' ' || e.code === 'Space' || k.startsWith('arrow')) e.preventDefault();
       if (!(this.heldMask & b)) this.pressed.add(b);
       this.heldMask |= b;
     });
     window.addEventListener('keyup', (e) => {
-      const b = this.keyMap.get(e.key.toLowerCase());
+      const k = e.key.toLowerCase();
+      let b = this.keyMap.get(k);
+      if (b === undefined) {
+        if (e.code === 'Space') b = BTN.Cross;
+        else if (e.code === 'ArrowUp' || e.code === 'KeyW') b = BTN.Up;
+        else if (e.code === 'ArrowLeft' || e.code === 'KeyA') b = BTN.Left;
+        else if (e.code === 'ArrowRight' || e.code === 'KeyD') b = BTN.Right;
+        else if (e.code === 'ArrowDown' || e.code === 'KeyS') b = BTN.Down;
+        else if (e.code === 'Enter' || e.code === 'KeyZ') b = BTN.Cross;
+      }
       if (b === undefined) return;
       this.heldMask &= ~b;
       this.released.add(b);

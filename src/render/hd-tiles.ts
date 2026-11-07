@@ -144,103 +144,212 @@ export class HDTileLibrary {
 
     // 5. Golden Hoops / Rings (Tile 13-28)
     // Hoops span 2 cells (either vert: top/bottom, or horiz: left/right)
+    // Tiles 13-20: Small Hoops (sized for Normal Ball d=12, blocks Enlarged Ball d=16)
+    // Tiles 21-28: Large Hoops (sized for Enlarged Ball d=16, allows both sizes)
     {
-      const buildHoopPart = (vert: boolean, isTopOrLeft: boolean, active: boolean) => {
+      const drawEllipticalArc = (
+        ctx: PIXI.GraphicsContext,
+        cx: number, cy: number,
+        rx: number, ry: number,
+        startAngle: number, endAngle: number,
+        steps = 20
+      ) => {
+        for (let i = 0; i <= steps; i++) {
+          const a = startAngle + (i / steps) * (endAngle - startAngle);
+          const px = cx + rx * Math.cos(a);
+          const py = cy + ry * Math.sin(a);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+      };
+
+      const buildHoopPart = (vert: boolean, isTopOrLeft: boolean, active: boolean, isLarge: boolean) => {
         const ctx = new PIXI.GraphicsContext();
-        const mainCol = active ? 0xffc107 : 0xb0bec5;
-        const lightCol = active ? 0xfff9c4 : 0xeceff1;
-        const darkCol = active ? 0xff8f00 : 0x78909c;
-        const glowCol = active ? 0xffd54f : 0x90a4ae;
+        const mainCol = active ? (isLarge ? 0xffb300 : 0xffc107) : 0xb0bec5;
+        const lightCol = active ? (isLarge ? 0xfff59d : 0xfff9c4) : 0xeceff1;
+        const darkCol = active ? (isLarge ? 0xff6f00 : 0xff8f00) : 0x78909c;
+        const coreCol = active ? 0xffd54f : 0xcfd8dc;
+        const mountCol = 0x37474f;
+        const mountHighlight = 0x546e7a;
+
+        // Radii:
+        // Small Hoop: Sized for normal ball (diameter 12).
+        // Opening = 12.8px (fits 12px ball with 0.8px clearance; blocks 16px big ball!).
+        // Outer major diameter = 17.2px, outer minor diameter = 8.4px.
+        //
+        // Large Hoop: Sized for enlarged ball (diameter 16).
+        // Opening = 17.8px (fits 16px ball with 1.8px clearance; small ball fits with 5.8px clearance!).
+        // Outer major diameter = 23.0px, outer minor diameter = 10.8px.
+        const rMajor = isLarge ? 10.2 : 7.5;
+        const rMinor = isLarge ? 4.6 : 3.4;
+        const strokeW = isLarge ? 2.0 : 1.6;
+        const highlightW = isLarge ? 0.8 : 0.6;
 
         if (vert) {
-          // Vertical hoop half (x center is 6)
+          // Vertical hoop (center is x = 6; seam at y = s for top, y = 0 for bottom)
+          const rx = rMinor;
+          const ry = rMajor;
+          const a0 = isTopOrLeft ? Math.PI : 0;
+          const a1 = isTopOrLeft ? 2 * Math.PI : Math.PI;
           const cy = isTopOrLeft ? s : 0;
-          const rOuter = 5.2;
-          const rInner = 3.2;
 
-          if (isTopOrLeft) {
-            // Top half of vertical hoop: curve from y=12 up to y=6.8
-            ctx.arc(6, s, rOuter, Math.PI, 0)
-              .stroke({ width: 2, color: mainCol });
-            ctx.arc(6, s, rOuter + 0.5, Math.PI, 0)
-              .stroke({ width: 0.7, color: lightCol });
-            ctx.arc(6, s, rInner, Math.PI, 0)
-              .stroke({ width: 0.7, color: darkCol });
-            // Post mount at apex
-            ctx.circle(6, s - rOuter - 0.5, 1.2).fill(darkCol);
-          } else {
-            // Bottom half of vertical hoop: curve from y=0 down to y=5.2
-            ctx.arc(6, 0, rOuter, 0, Math.PI)
-              .stroke({ width: 2, color: mainCol });
-            ctx.arc(6, 0, rOuter + 0.5, 0, Math.PI)
-              .stroke({ width: 0.7, color: darkCol });
-            ctx.arc(6, 0, rInner, 0, Math.PI)
-              .stroke({ width: 0.7, color: lightCol });
-            // Ground mount bracket
-            ctx.rect(4.5, rOuter - 0.5, 3, 2).fill(0x37474f);
+          // 1. Dark depth stroke (rim shadow)
+          drawEllipticalArc(ctx, 6, cy, rx, ry, a0, a1);
+          ctx.stroke({ width: strokeW + 0.6, color: darkCol, cap: 'butt' });
+
+          // 2. Main metallic body
+          drawEllipticalArc(ctx, 6, cy, rx, ry, a0, a1);
+          ctx.stroke({ width: strokeW, color: mainCol, cap: 'butt' });
+
+          // 3. Highlight reflection along upper/inner rim
+          const hOff = isTopOrLeft ? 0.3 : -0.3;
+          drawEllipticalArc(ctx, 6, cy, rx - 0.2, ry + hOff, a0, a1);
+          ctx.stroke({ width: highlightW, color: lightCol, cap: 'butt' });
+
+          // 4. Large hoop extra detail: center core glow / bevel ridge
+          if (isLarge) {
+            drawEllipticalArc(ctx, 6, cy, rx, ry, a0, a1);
+            ctx.stroke({ width: 0.5, color: coreCol, alpha: 0.8, cap: 'butt' });
           }
+
+          // 5. Mount brackets
+          if (isTopOrLeft) {
+            // Apex mount (top)
+            const apexY = s - ry;
+            if (isLarge) {
+              // Heavy-duty reinforced top bracket
+              ctx.rect(4.5, 0, 3, apexY + 0.5).fill(mountCol);
+              ctx.rect(4.2, apexY - 0.5, 3.6, 1.2).fill(mountHighlight);
+              ctx.circle(6, apexY * 0.5, 0.7).fill(0x263238);
+            } else {
+              // Compact neat top pin mount
+              ctx.rect(5.2, 0, 1.6, apexY + 0.5).fill(mountCol);
+              ctx.circle(6, apexY, 1.1).fill(mountHighlight);
+            }
+          } else {
+            // Base mount (ground / bottom)
+            const baseY = ry;
+            if (isLarge) {
+              // Heavy pedestal mount bracket
+              ctx.rect(4.0, baseY - 0.5, 4.0, s - baseY + 0.5).fill(mountCol);
+              ctx.rect(3.5, s - 2, 5.0, 2).fill(mountHighlight);
+              ctx.circle(5, s - 1, 0.6).fill(0x212121);
+              ctx.circle(7, s - 1, 0.6).fill(0x212121);
+            } else {
+              // Standard floor mount
+              ctx.rect(4.8, baseY - 0.5, 2.4, s - baseY + 0.5).fill(mountCol);
+              ctx.rect(4.2, s - 1.5, 3.6, 1.5).fill(mountHighlight);
+            }
+          }
+
+          // 6. Radiant glints & sparkles (when active)
           if (active) {
-            // Radiant glints
-            ctx.circle(isTopOrLeft ? 4 : 8, isTopOrLeft ? 8 : 4, 1)
-              .fill({ color: 0xffffff, alpha: 0.95 });
+            if (isTopOrLeft) {
+              const gx = 6 - rx * 0.7;
+              const gy = s - ry * 0.7;
+              ctx.circle(gx, gy, isLarge ? 1.4 : 1.0).fill({ color: 0xffffff, alpha: 0.95 });
+              if (isLarge) {
+                ctx.circle(6 + rx * 0.65, s - ry * 0.75, 0.9).fill({ color: 0xfff9c4, alpha: 0.85 });
+              }
+            } else {
+              const gx = 6 + rx * 0.65;
+              const gy = ry * 0.65;
+              ctx.circle(gx, gy, isLarge ? 1.1 : 0.8).fill({ color: 0xffffff, alpha: 0.9 });
+            }
           }
         } else {
-          // Horizontal hoop half (y center is 6)
+          // Horizontal hoop (center is y = 6; seam at x = s for left, x = 0 for right)
+          const rx = rMajor;
+          const ry = rMinor;
+          const a0 = isTopOrLeft ? 0.5 * Math.PI : 1.5 * Math.PI;
+          const a1 = isTopOrLeft ? 1.5 * Math.PI : 2.5 * Math.PI;
           const cx = isTopOrLeft ? s : 0;
-          const rOuter = 5.2;
-          const rInner = 3.2;
 
-          if (isTopOrLeft) {
-            // Left half of horizontal hoop: curve from x=12 left to x=6.8
-            ctx.arc(s, 6, rOuter, Math.PI * 0.5, Math.PI * 1.5)
-              .stroke({ width: 2, color: mainCol });
-            ctx.arc(s, 6, rOuter + 0.5, Math.PI * 0.5, Math.PI * 1.5)
-              .stroke({ width: 0.7, color: lightCol });
-            ctx.arc(s, 6, rInner, Math.PI * 0.5, Math.PI * 1.5)
-              .stroke({ width: 0.7, color: darkCol });
-            // Wall mount
-            ctx.rect(0, 4.5, 2, 3).fill(0x37474f);
-          } else {
-            // Right half of horizontal hoop: curve from x=0 right to x=5.2
-            ctx.arc(0, 6, rOuter, Math.PI * 1.5, Math.PI * 0.5)
-              .stroke({ width: 2, color: mainCol });
-            ctx.arc(0, 6, rOuter + 0.5, Math.PI * 1.5, Math.PI * 0.5)
-              .stroke({ width: 0.7, color: darkCol });
-            ctx.arc(0, 6, rInner, Math.PI * 1.5, Math.PI * 0.5)
-              .stroke({ width: 0.7, color: lightCol });
-            // Wall mount
-            ctx.rect(s - 2, 4.5, 2, 3).fill(0x37474f);
+          // 1. Dark depth stroke
+          drawEllipticalArc(ctx, cx, 6, rx, ry, a0, a1);
+          ctx.stroke({ width: strokeW + 0.6, color: darkCol, cap: 'butt' });
+
+          // 2. Main metallic body
+          drawEllipticalArc(ctx, cx, 6, rx, ry, a0, a1);
+          ctx.stroke({ width: strokeW, color: mainCol, cap: 'butt' });
+
+          // 3. Highlight reflection along top edge
+          const hOff = isTopOrLeft ? 0.3 : -0.3;
+          drawEllipticalArc(ctx, cx, 6, rx + hOff, ry - 0.2, a0, a1);
+          ctx.stroke({ width: highlightW, color: lightCol, cap: 'butt' });
+
+          // 4. Large hoop extra detail: center core glow / bevel ridge
+          if (isLarge) {
+            drawEllipticalArc(ctx, cx, 6, rx, ry, a0, a1);
+            ctx.stroke({ width: 0.5, color: coreCol, alpha: 0.8, cap: 'butt' });
           }
+
+          // 5. Mount brackets
+          if (isTopOrLeft) {
+            // Left wall mount
+            const edgeX = s - rx;
+            if (isLarge) {
+              ctx.rect(0, 4.5, edgeX + 0.5, 3.0).fill(mountCol);
+              ctx.rect(0, 4.0, 2.0, 4.0).fill(mountHighlight);
+              ctx.circle(1.0, 6, 0.7).fill(0x212121);
+            } else {
+              ctx.rect(0, 5.0, edgeX + 0.5, 2.0).fill(mountCol);
+              ctx.rect(0, 4.5, 1.6, 3.0).fill(mountHighlight);
+            }
+          } else {
+            // Right wall mount
+            const edgeX = rx;
+            if (isLarge) {
+              ctx.rect(edgeX - 0.5, 4.5, s - edgeX + 0.5, 3.0).fill(mountCol);
+              ctx.rect(s - 2.0, 4.0, 2.0, 4.0).fill(mountHighlight);
+              ctx.circle(s - 1.0, 6, 0.7).fill(0x212121);
+            } else {
+              ctx.rect(edgeX - 0.5, 5.0, s - edgeX + 0.5, 2.0).fill(mountCol);
+              ctx.rect(s - 1.6, 4.5, 1.6, 3.0).fill(mountHighlight);
+            }
+          }
+
+          // 6. Radiant glints & sparkles (when active)
           if (active) {
-            ctx.circle(isTopOrLeft ? 8 : 4, isTopOrLeft ? 4 : 8, 1)
-              .fill({ color: 0xffffff, alpha: 0.95 });
+            if (isTopOrLeft) {
+              const gx = s - rx * 0.7;
+              const gy = 6 - ry * 0.7;
+              ctx.circle(gx, gy, isLarge ? 1.4 : 1.0).fill({ color: 0xffffff, alpha: 0.95 });
+              if (isLarge) {
+                ctx.circle(s - rx * 0.75, 6 + ry * 0.65, 0.9).fill({ color: 0xfff9c4, alpha: 0.85 });
+              }
+            } else {
+              const gx = rx * 0.65;
+              const gy = 6 + ry * 0.65;
+              ctx.circle(gx, gy, isLarge ? 1.1 : 0.8).fill({ color: 0xffffff, alpha: 0.9 });
+            }
           }
         }
         return ctx;
       };
 
-      // Hoops 13-16 (active) and 17-20 (inactive)
+      // Hoops 13-16 (small active) and 17-20 (small inactive)
       // 13: vertTop, 14: vertBottom, 15: horizLeft, 16: horizRight
-      this.contexts.set('hoop_13', buildHoopPart(true, true, true));
-      this.contexts.set('hoop_14', buildHoopPart(true, false, true));
-      this.contexts.set('hoop_15', buildHoopPart(false, true, true));
-      this.contexts.set('hoop_16', buildHoopPart(false, false, true));
+      this.contexts.set('hoop_13', buildHoopPart(true, true, true, false));
+      this.contexts.set('hoop_14', buildHoopPart(true, false, true, false));
+      this.contexts.set('hoop_15', buildHoopPart(false, true, true, false));
+      this.contexts.set('hoop_16', buildHoopPart(false, false, true, false));
 
-      this.contexts.set('hoop_17', buildHoopPart(true, true, false));
-      this.contexts.set('hoop_18', buildHoopPart(true, false, false));
-      this.contexts.set('hoop_19', buildHoopPart(false, true, false));
-      this.contexts.set('hoop_20', buildHoopPart(false, false, false));
+      this.contexts.set('hoop_17', buildHoopPart(true, true, false, false));
+      this.contexts.set('hoop_18', buildHoopPart(true, false, false, false));
+      this.contexts.set('hoop_19', buildHoopPart(false, true, false, false));
+      this.contexts.set('hoop_20', buildHoopPart(false, false, false, false));
 
-      // Hoops 21-24 (active set 2) and 25-28 (inactive set 2)
-      this.contexts.set('hoop_21', buildHoopPart(true, true, true));
-      this.contexts.set('hoop_22', buildHoopPart(true, false, true));
-      this.contexts.set('hoop_23', buildHoopPart(false, true, true));
-      this.contexts.set('hoop_24', buildHoopPart(false, false, true));
+      // Hoops 21-24 (large active) and 25-28 (large inactive)
+      this.contexts.set('hoop_21', buildHoopPart(true, true, true, true));
+      this.contexts.set('hoop_22', buildHoopPart(true, false, true, true));
+      this.contexts.set('hoop_23', buildHoopPart(false, true, true, true));
+      this.contexts.set('hoop_24', buildHoopPart(false, false, true, true));
 
-      this.contexts.set('hoop_25', buildHoopPart(true, true, false));
-      this.contexts.set('hoop_26', buildHoopPart(true, false, false));
-      this.contexts.set('hoop_27', buildHoopPart(false, true, false));
-      this.contexts.set('hoop_28', buildHoopPart(false, false, false));
+      this.contexts.set('hoop_25', buildHoopPart(true, true, false, true));
+      this.contexts.set('hoop_26', buildHoopPart(true, false, false, true));
+      this.contexts.set('hoop_27', buildHoopPart(false, true, false, true));
+      this.contexts.set('hoop_28', buildHoopPart(false, false, false, true));
     }
 
     // 6. Extra Life (Tile 29)

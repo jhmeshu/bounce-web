@@ -7,7 +7,7 @@ import {
   UWATER_MAX_GRAVITY, UWATER_GRAVITY_ACCELL, UWATER_LARGE_MAX_GRAVITY, LARGE_UWATER_GRAVITY_ACCELL,
   BASE_GRAVITY, MAX_TOTAL_SPEED, HORZ_ACCELL, FRICTION_DECELL, MAX_HORZ_SPEED, MAX_HORZ_BONUS_SPEED,
   MIN_BOUNCE_SPEED, ROOF_COLLISION_SPEED, BONUS_DURATION, POPPED_FRAMES, THIN_TILE_SIZE,
-  MOVEMENT_STEP_DIVISOR, STUCK_BALL_OFFSET, TILE_ID_MASK, TILE_FLAG_WATER,
+  MOVEMENT_STEP_DIVISOR, MAX_PLACEMENT_OFFSET, TILE_ID_MASK, TILE_FLAG_WATER,
   TILE_CHECKPOINT, TILE_EXIT, TILE_EXTRA_LIFE, TILE_SPEED_BONUS,
   TILE_DEFLATOR_FLOOR, TILE_DEFLATOR_LEFT_WALL, TILE_DEFLATOR_CEILING, TILE_DEFLATOR_RIGHT_WALL,
   TILE_INFLATOR_FLOOR, TILE_INFLATOR_LEFT_WALL, TILE_INFLATOR_CEILING, TILE_INFLATOR_RIGHT_WALL,
@@ -32,7 +32,15 @@ export interface PhysicsHooks {
   decLife: () => void;
 }
 
-export function playerInit(p: Player, x: number, y: number, size: SizeState) {
+// A placement probe needs the gadget switch's blocking answer but must not resize the ball, pop it,
+// fire a hook, or mutate the level. It runs with this stub so the switch's hook calls stay safe.
+const PROBE_HOOKS: PhysicsHooks = {
+  invincible: () => false, onPop: () => {}, onPickup: () => {}, onHoop: () => {},
+  addScore: () => {}, setRespawn: () => {}, extraLife: () => {}, ringCollected: () => {},
+  exitIsOpen: () => false, completeLevel: () => {}, decLife: () => {},
+};
+
+export function playerInit(p: Player, x: number, y: number, size: SizeState, lvl: LevelData) {
   p.xPos = x; p.yPos = y; p.globalBallX = 0; p.globalBallY = 0;
   p.xSpeed = 0; p.ySpeed = 0; p.direction = 0; p.jumpOffset = 0;
   p.ballState = BallState.Normal; p.sizeState = size;
@@ -41,7 +49,17 @@ export function playerInit(p: Player, x: number, y: number, size: SizeState) {
   p.mGroundedFlag = false; p.mCDRubberFlag = false; p.mCDRampFlag = false;
   p.speedBonusCntr = 0; p.gravBonusCntr = 0; p.jumpBonusCntr = 0;
   p.popCntr = 0; p.slideCntr = 0; p.isInWater = false;
-  // nudge large ball if stuck — needs level; handled by caller via collision probe
+  p.groundedTimer = 0;
+  // A large ball can start or respawn at a spot whose space only fits a small ball. Level 11's
+  // checkpoint gem sits in a one-tile deflator ring, and level 9's start tile has a 16px box
+  // overlapping brick, so a size-preserving respawn there would freeze forever. The original
+  // recovers because its ball constructor calls the grow routine, and so this same walk, whenever
+  // the ball starts large. Falling back to small covers the pockets the walk cannot clear, so the
+  // ball is never left at a size that does not fit.
+  if (size === SizeState.Large && !findFreeSpot(p, lvl)) {
+    p.sizeState = SizeState.Small; p.ballSize = NORMAL_SIZE; p.mHalfBallSize = HALF_NORMAL_SIZE;
+    findFreeSpot(p, lvl);
+  }
 }
 export function setDir(p: Player, d: MoveDir) { if (d === MoveDir.Left || d === MoveDir.Right || d === MoveDir.Up) p.direction |= d; }
 export function releaseDir(p: Player, d: MoveDir) { if (d === MoveDir.Left || d === MoveDir.Right || d === MoveDir.Up) p.direction &= ~d; }
@@ -131,27 +149,55 @@ function edgeCollide(p: Player, row: number, col: number, id: number): boolean {
   return rectCollide(p.globalBallX, p.globalBallY, p.globalBallX + p.ballSize, p.globalBallY + p.ballSize, x, y, r, b);
 }
 
+function freeAt(p: Player, lvl: LevelData, x: number, y: number): boolean {
+  return collisionDetection(p, lvl, x, y, null, true);
+}
+// Each probe rewrites the collision globals, can set the ramp/rubber flags, and can redirect the
+// ball's velocity off a ramp — none of which a placement walk is entitled to do, and all of which
+// would otherwise leak into the caller's own collision scan. Snapshot and restore around the walk,
+// so enlarging mid-frame relocates the ball without steering it or corrupting the scan in progress.
+function findFreeSpot(p: Player, lvl: LevelData): boolean {
+  const gx = p.globalBallX, gy = p.globalBallY, xs = p.xSpeed, ys = p.ySpeed;
+  const rubber = p.mCDRubberFlag, ramp = p.mCDRampFlag;
+  const found = walkFreeSpot(p, lvl);
+  p.globalBallX = gx; p.globalBallY = gy; p.xSpeed = xs; p.ySpeed = ys;
+  p.mCDRubberFlag = rubber; p.mCDRampFlag = ramp;
+  return found;
+}
+// Free-space walk in six directions at a growing radius, N/NW/NE/S/SW/SE. The original runs this
+// from two places — the inflator tile, and the ball constructor whenever the ball starts large —
+// so it covers every spawn and respawn as well as touching an inflator. Its offset is a wrapping
+// byte with no cap, meaning a fully enclosed ball loops forever; MAX_PLACEMENT_OFFSET bounds it.
+// Each candidate is probed independently and the first free one wins, so the ball ends up adjacent
+// to the flower rather than jumping clear of it. Returns false when nothing within the cap fits, in
+// which case the caller must not keep the ball at the size it just tried.
+function walkFreeSpot(p: Player, lvl: LevelData): boolean {
+  // Offset 0 first, unlike the original which starts at 1 and so nudges every large spawn by 1px.
+  // A ball that already fits is never worth moving.
+  if (freeAt(p, lvl, p.xPos, p.yPos)) return true;
+  for (let offset = 1; offset <= MAX_PLACEMENT_OFFSET; offset++) {
+    if (freeAt(p, lvl, p.xPos, p.yPos - offset)) { p.yPos -= offset; return true; }
+    if (freeAt(p, lvl, p.xPos - offset, p.yPos - offset)) { p.xPos -= offset; p.yPos -= offset; return true; }
+    if (freeAt(p, lvl, p.xPos + offset, p.yPos - offset)) { p.xPos += offset; p.yPos -= offset; return true; }
+    if (freeAt(p, lvl, p.xPos, p.yPos + offset)) { p.yPos += offset; return true; }
+    if (freeAt(p, lvl, p.xPos - offset, p.yPos + offset)) { p.xPos -= offset; p.yPos += offset; return true; }
+    if (freeAt(p, lvl, p.xPos + offset, p.yPos + offset)) { p.xPos += offset; p.yPos += offset; return true; }
+  }
+  return false;
+}
 function enlargeBall(p: Player, lvl: LevelData) {
   if (p.sizeState === SizeState.Large) return;
   p.sizeState = SizeState.Large; p.ballSize = ENLARGED_SIZE; p.mHalfBallSize = HALF_ENLARGED_SIZE;
-  let offset = 2, found = false;
-  while (!found) {
-    found = true;
-    if (collisionDetection(p, lvl, p.xPos, p.yPos - offset, null as unknown as PhysicsHooks)) p.yPos -= offset;
-    else if (collisionDetection(p, lvl, p.xPos - offset, p.yPos - offset, null as unknown as PhysicsHooks)) { p.xPos -= offset; p.yPos -= offset; }
-    else if (collisionDetection(p, lvl, p.xPos + offset, p.yPos - offset, null as unknown as PhysicsHooks)) { p.xPos += offset; p.yPos -= offset; }
-    else if (collisionDetection(p, lvl, p.xPos, p.yPos + offset, null as unknown as PhysicsHooks)) p.yPos += offset;
-    else if (collisionDetection(p, lvl, p.xPos - offset, p.yPos + offset, null as unknown as PhysicsHooks)) { p.xPos -= offset; p.yPos += offset; }
-    else if (collisionDetection(p, lvl, p.xPos + offset, p.yPos + offset, null as unknown as PhysicsHooks)) { p.xPos += offset; p.yPos += offset; }
-    else { found = false; offset++; if (offset > 40) break; }
-  }
+  // Nowhere nearby fits 16px — the flower is in a pocket. Growing anyway would embed the ball and
+  // block it every frame forever, so stay small and let the next touch retry.
+  if (!findFreeSpot(p, lvl)) shrinkBall(p);
 }
-function shrinkBall(p: Player, lvl: LevelData) {
+// Shrinking only ever shrinks the collision box, so anything that fitted as large still fits as
+// small. The original's UseRegularBall does not reposition either — the ±2px nudge this port
+// invented reads as a visible pop after every deflation.
+function shrinkBall(p: Player) {
   if (p.sizeState === SizeState.Small) return;
   p.sizeState = SizeState.Small; p.ballSize = NORMAL_SIZE; p.mHalfBallSize = HALF_NORMAL_SIZE;
-  const offset = 2;
-  if (collisionDetection(p, lvl, p.xPos, p.yPos + offset, null as unknown as PhysicsHooks)) p.yPos += offset;
-  else if (collisionDetection(p, lvl, p.xPos, p.yPos - offset, null as unknown as PhysicsHooks)) p.yPos -= offset;
 }
 export function popBall(p: Player, hooks: PhysicsHooks) {
   if (hooks.invincible()) return;
@@ -161,7 +207,7 @@ export function popBall(p: Player, hooks: PhysicsHooks) {
   hooks.decLife();
 }
 
-function testTile(p: Player, lvl: LevelData, ty: number, tx: number, canMove: boolean, hooks: PhysicsHooks | null): boolean {
+function testTile(p: Player, lvl: LevelData, ty: number, tx: number, canMove: boolean, hooks: PhysicsHooks | null, probe: boolean): boolean {
   if (ty >= lvl.height || ty < 0 || tx >= lvl.width || tx < 0) return false;
   if (p.ballState === BallState.Popped) return false;
   const tile = tileRawAt(lvl, tx, ty);
@@ -206,29 +252,54 @@ function testTile(p: Player, lvl: LevelData, ty: number, tx: number, canMove: bo
       if (id >= 34) p.mCDRubberFlag = true;
     }
   }
-  if (!hooks) return canMove;
+  // Gadgets either block, resize, or fire a hook. A placement probe needs the blocking answer but
+  // must not resize the ball, pop it, or mutate the level, so the switch also runs when probing —
+  // against PROBE_HOOKS, with every side effect skipped. Without this the probe is blind to the very
+  // tiles the walk exists to clear: a ball placed overlapping a deflator, or one grown while
+  // overlapping an inflator's thin band, is blocked on every later frame and never moves again.
+  if (!hooks) {
+    if (!probe) return canMove;
+    hooks = PROBE_HOOKS;
+  }
   switch (id) {
-    case TILE_SPEED_BONUS: canMove = false; p.speedBonusCntr = BONUS_DURATION; hooks.onPickup(); break;
+    case TILE_SPEED_BONUS:
+      canMove = false;
+      if (!probe) { p.speedBonusCntr = BONUS_DURATION; hooks.onPickup(); }
+      break;
     case TILE_DEFLATOR_FLOOR: case TILE_DEFLATOR_LEFT_WALL: case TILE_DEFLATOR_CEILING: case TILE_DEFLATOR_RIGHT_WALL:
-      canMove = false; if (p.ballSize === ENLARGED_SIZE) shrinkBall(p, lvl); break;
+      canMove = false;
+      if (!probe && p.ballSize === ENLARGED_SIZE) shrinkBall(p);
+      break;
     case TILE_INFLATOR_FLOOR: case TILE_INFLATOR_LEFT_WALL: case TILE_INFLATOR_CEILING: case TILE_INFLATOR_RIGHT_WALL:
-      if (thinCollide(p, ty, tx, id)) { canMove = false; if (p.ballSize === NORMAL_SIZE) enlargeBall(p, lvl); } break;
-    case TILE_CHECKPOINT: hooks.addScore(200); hooks.setRespawn(tx, ty); break;
-    case TILE_EXIT:
       if (thinCollide(p, ty, tx, id)) {
-        if (hooks.exitIsOpen()) hooks.completeLevel(); else canMove = false;
+        canMove = false;
+        if (!probe && p.ballSize === NORMAL_SIZE) enlargeBall(p, lvl);
       }
       break;
-    case TILE_EXTRA_LIFE: hooks.extraLife(); setTileId(lvl, tx, ty, 0); break;
+    case TILE_CHECKPOINT:
+      if (!probe) { hooks.addScore(200); hooks.setRespawn(tx, ty); }
+      break;
+    case TILE_EXIT:
+      if (thinCollide(p, ty, tx, id)) {
+        if (!probe && hooks.exitIsOpen()) hooks.completeLevel(); else canMove = false;
+      }
+      break;
+    case TILE_EXTRA_LIFE:
+      if (!probe) { hooks.extraLife(); setTileId(lvl, tx, ty, 0); }
+      break;
     case TILE_GRAVITY_FLOOR: case TILE_GRAVITY_LEFT_WALL: case TILE_GRAVITY_CEILING: case TILE_GRAVITY_RIGHT_WALL:
-      canMove = false; p.gravBonusCntr = BONUS_DURATION; hooks.onPickup(); break;
+      canMove = false;
+      if (!probe) { p.gravBonusCntr = BONUS_DURATION; hooks.onPickup(); }
+      break;
     case TILE_JUMP_FLOOR: case TILE_JUMP_LEFT_WALL: case TILE_JUMP_CEILING: case TILE_JUMP_RIGHT_WALL:
-      canMove = false; p.jumpBonusCntr = BONUS_DURATION; hooks.onPickup(); break;
+      canMove = false;
+      if (!probe) { p.jumpBonusCntr = BONUS_DURATION; hooks.onPickup(); }
+      break;
   }
   return canMove;
 }
 
-function collisionDetection(p: Player, lvl: LevelData, testX: number, testY: number, hooks: PhysicsHooks | null): boolean {
+function collisionDetection(p: Player, lvl: LevelData, testX: number, testY: number, hooks: PhysicsHooks | null, probe: boolean): boolean {
   let b = 0; if (testY < 0) b = 12;
   const i = Math.floor((testX - p.mHalfBallSize) / TILE_SIZE);
   const j = Math.floor((testY - b - p.mHalfBallSize) / TILE_SIZE);
@@ -237,8 +308,28 @@ function collisionDetection(p: Player, lvl: LevelData, testX: number, testY: num
   const k = Math.floor((testX - 1 + p.mHalfBallSize) / TILE_SIZE) + 1;
   const m = Math.floor((testY - b - 1 + p.mHalfBallSize) / TILE_SIZE) + 1;
   let canMove = true;
-  for (let n = i; n < k; n++) for (let i1 = j; i1 < m; i1++) canMove = testTile(p, lvl, i1, n, canMove, hooks);
+  for (let n = i; n < k; n++) for (let i1 = j; i1 < m; i1++) canMove = testTile(p, lvl, i1, n, canMove, hooks, probe);
   return canMove;
+}
+
+function isAtGround(p: Player, lvl: LevelData, reverse: boolean): boolean {
+  if (p.mGroundedFlag) return true;
+  // If moving rapidly away from ground from a previous high jump, disallow mid-air jump
+  if (reverse ? p.ySpeed > 15 : p.ySpeed < -15) {
+    if ((p.groundedTimer ?? 0) > 0 && (reverse ? p.ySpeed <= 25 : p.ySpeed >= -25)) {
+      return true;
+    }
+    return false;
+  }
+  if ((p.groundedTimer ?? 0) > 0) return true;
+  // Probe 2px in gravity direction
+  const dy = reverse ? -2 : 2;
+  const gx = p.globalBallX, prevGy = p.globalBallY;
+  const rubber = p.mCDRubberFlag, ramp = p.mCDRampFlag;
+  const blocked = !collisionDetection(p, lvl, p.xPos, p.yPos + dy, PROBE_HOOKS, true);
+  p.globalBallX = gx; p.globalBallY = prevGy;
+  p.mCDRubberFlag = rubber; p.mCDRampFlag = ramp;
+  return blocked;
 }
 
 export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
@@ -250,6 +341,7 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
   if (p.globalBallX === 0 && p.globalBallY === 0) {
     p.globalBallX = p.xPos - p.mHalfBallSize; p.globalBallY = p.yPos - p.mHalfBallSize;
   }
+  if (p.groundedTimer && p.groundedTimer > 0) p.groundedTimer--;
   const ctx = Math.floor(p.xPos / TILE_SIZE), cty = Math.floor(p.yPos / TILE_SIZE);
   if (ctx >= 0 && ctx < lvl.width && cty >= 0 && cty < lvl.height) {
     p.isInWater = (tileRawAt(lvl, ctx, cty) & TILE_FLAG_WATER) !== 0;
@@ -280,7 +372,7 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
   const yIters = Math.floor(Math.abs(p.ySpeed) / MOVEMENT_STEP_DIVISOR);
   for (let i = 0; i < yIters; i++) {
     const yStep = p.ySpeed === 0 ? 0 : (p.ySpeed < 0 ? -1 : 1);
-    if (collisionDetection(p, lvl, p.xPos, p.yPos + yStep, hooks)) {
+    if (collisionDetection(p, lvl, p.xPos, p.yPos + yStep, hooks, false)) {
       p.yPos += yStep; p.mGroundedFlag = false;
       if (gravity === -30) {
         const curTy = Math.floor(p.yPos / TILE_SIZE);
@@ -293,12 +385,13 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
       }
     } else {
       if (p.mCDRampFlag && p.xSpeed < 10 && p.slideCntr === 0) {
-        if (collisionDetection(p, lvl, p.xPos + 1, p.yPos + yStep, hooks)) { p.xPos += 1; p.yPos += yStep; p.mCDRampFlag = false; }
-        else if (collisionDetection(p, lvl, p.xPos - 1, p.yPos + yStep, hooks)) { p.xPos -= 1; p.yPos += yStep; p.mCDRampFlag = false; }
+        if (collisionDetection(p, lvl, p.xPos + 1, p.yPos + yStep, hooks, false)) { p.xPos += 1; p.yPos += yStep; p.mCDRampFlag = false; }
+        else if (collisionDetection(p, lvl, p.xPos - 1, p.yPos + yStep, hooks, false)) { p.xPos -= 1; p.yPos += yStep; p.mCDRampFlag = false; }
       }
       if (yStep > 0 || (reverse && yStep < 0)) {
         p.ySpeed = Math.trunc(p.ySpeed * -1 / 2);
         p.mGroundedFlag = true;
+        p.groundedTimer = 5;
         if (p.mCDRubberFlag && (p.direction & MoveDir.Up)) {
           p.mCDRubberFlag = false;
           p.jumpOffset += reverse ? MIN_BOUNCE_SPEED : -MIN_BOUNCE_SPEED;
@@ -324,19 +417,21 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
   else if (p.xSpeed > 0) p.xSpeed -= FRICTION_DECELL;
   else if (p.xSpeed < 0) p.xSpeed += FRICTION_DECELL;
 
-  if (p.mGroundedFlag && (p.direction & MoveDir.Up)) {
+  if (isAtGround(p, lvl, reverse) && (p.direction & MoveDir.Up)) {
     p.ySpeed = reverse ? -JUMP_STRENGTH + p.jumpOffset : JUMP_STRENGTH + p.jumpOffset;
     p.mGroundedFlag = false;
+    p.groundedTimer = 0;
+    p.direction &= ~MoveDir.Up;
   }
   const xIters = Math.floor(Math.abs(p.xSpeed) / MOVEMENT_STEP_DIVISOR);
   for (let i = 0; i < xIters; i++) {
     const xStep = p.xSpeed === 0 ? 0 : (p.xSpeed < 0 ? -1 : 1);
-    if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos, hooks)) p.xPos += xStep;
+    if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos, hooks, false)) p.xPos += xStep;
     else if (p.mCDRampFlag) {
       p.mCDRampFlag = false;
       const diag = reverse ? 1 : -1;
-      if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos + diag, hooks)) { p.xPos += xStep; p.yPos += diag; }
-      else if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos - diag, hooks)) { p.xPos += xStep; p.yPos -= diag; }
+      if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos + diag, hooks, false)) { p.xPos += xStep; p.yPos += diag; }
+      else if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos - diag, hooks, false)) { p.xPos += xStep; p.yPos -= diag; }
       else p.xSpeed = -(p.xSpeed >> 1);
     }
   }

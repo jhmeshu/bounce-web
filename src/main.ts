@@ -95,12 +95,13 @@ async function boot() {
       let steps = 0;
       while (acc >= FIXED && steps < 4) { game.updateFixed(); acc -= FIXED; steps++; }
       if (steps === 4) acc = 0;
+      if (steps > 0) input.endFrame();
     } else {
       pollMenus();
       acc = 0;
+      input.endFrame();
     }
     renderer.renderFrame();
-    input.endFrame();
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

@@ -738,7 +738,7 @@ export class Renderer {
       ui.addChild(t);
 
       const sub = new PIXI.Text({
-        text: 'Remastered for Web with PixiJS v8 · Press Enter to Play',
+        text: 'Press Enter to Play',
         style: {
           fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
           fontSize: 16,

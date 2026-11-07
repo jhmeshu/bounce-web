@@ -23,6 +23,7 @@ export class Game {
   exitOffset = 0; exitState: 'closed' | 'waiting' | 'opening' | 'open' = 'closed';
   respawn = { x: 0, y: 0 };
   camX = 0; camY = 0; camInit = false;
+  jumpBuffer = 0;
   levelCache = new Map<number, LevelData>();
   hooks: PhysicsHooks;
   onEffect?: (name: string, x: number, y: number) => void;
@@ -83,8 +84,9 @@ export class Game {
     if (fresh) { this.score = 0; this.numLives = 3; this.newBest = false; this.savedInProgress = true; }
     this.exitOffset = 0; this.exitState = 'closed';
     this.respawn = { x: lvl.startTileX, y: lvl.startTileY };
-    playerInit(this.player, lvl.startPosX, lvl.startPosY, lvl.ballSize === 0 ? SizeState.Small : SizeState.Large);
+    playerInit(this.player, lvl.startPosX, lvl.startPosY, lvl.ballSize === 0 ? SizeState.Small : SizeState.Large, lvl);
     this.camInit = false;
+    this.jumpBuffer = 0;
     this.state = 'game';
   }
   setRespawn(x: number, y: number) {
@@ -159,18 +161,34 @@ export class Game {
     if (inp.consumeReleased(BTN.Left) || !inp.held(BTN.Left)) releaseDir(this.player, MoveDir.Left);
     if (inp.consumePressed(BTN.Right) || inp.held(BTN.Right)) setDir(this.player, MoveDir.Right);
     if (inp.consumeReleased(BTN.Right) || !inp.held(BTN.Right)) releaseDir(this.player, MoveDir.Right);
-    if (inp.consumePressed(BTN.Cross) || inp.consumePressed(BTN.Up)) { setDir(this.player, MoveDir.Up); }
+    const jumpPressed = inp.consumePressed(BTN.Cross) || inp.consumePressed(BTN.Up);
     const jumpHeld = inp.held(BTN.Cross) || inp.held(BTN.Up);
-    if (inp.consumeReleased(BTN.Cross) || inp.consumeReleased(BTN.Up) || !jumpHeld) releaseDir(this.player, MoveDir.Up);
+    if (jumpPressed) {
+      this.jumpBuffer = 7;
+    } else if (jumpHeld) {
+      this.jumpBuffer = Math.max(this.jumpBuffer, 2);
+    }
+
+    if (this.jumpBuffer > 0) {
+      setDir(this.player, MoveDir.Up);
+      this.jumpBuffer--;
+    } else {
+      releaseDir(this.player, MoveDir.Up);
+    }
+
     playerUpdate(this.player, this.level, this.hooks);
+    if (!(this.player.direction & MoveDir.Up) && !jumpHeld) {
+      this.jumpBuffer = 0;
+    }
     if (this.player.ballState === BallState.Dead) {
       if (this.numLives < 0) {
         this.saveRecords(); this.savedInProgress = false; this.state = 'gameover';
       } else {
         const sz = this.player.sizeState;
         const half = sz === SizeState.Small ? 6 : 8;
-        playerInit(this.player, this.respawn.x * TILE_SIZE + half, this.respawn.y * TILE_SIZE + half, sz);
+        playerInit(this.player, this.respawn.x * TILE_SIZE + half, this.respawn.y * TILE_SIZE + half, sz, this.level);
         this.camInit = false;
+        this.jumpBuffer = 0;
         inp.resetEdges();
       }
     }

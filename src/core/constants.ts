@@ -37,7 +37,9 @@ export const BONUS_DURATION = 300;
 export const POPPED_FRAMES = 5;
 export const THIN_TILE_SIZE = 4;
 export const MOVEMENT_STEP_DIVISOR = 10;
-export const STUCK_BALL_OFFSET = 4;
+// Cap for the free-space placement walk. The original has no cap (its offset is a
+// wrapping byte, so a fully enclosed ball loops forever); we need a bound.
+export const MAX_PLACEMENT_OFFSET = 64;
 
 export const RING_POINTS = 500;
 export const GEM_POINTS = 200;
@@ -102,4 +104,5 @@ export interface Player {
   speedBonusCntr: number; gravBonusCntr: number; jumpBonusCntr: number;
   popCntr: number; slideCntr: number;
   isInWater: boolean;
+  groundedTimer?: number;
 }
