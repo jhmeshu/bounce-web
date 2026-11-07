@@ -18,6 +18,21 @@ async function boot() {
   // preload level 1 into cache
   await game.ensureLevel(1);
 
+  // Touch controls mirror the game state: Up/Down + ENTER in menus,
+  // ⬆ jump in game, pause always in the middle.
+  const touchControls = document.getElementById('touch-controls');
+  const jumpBtn = document.getElementById('btn-jump');
+  function syncTouchControls() {
+    if (!touchControls || !jumpBtn) return;
+    const inGame = game.state === 'game';
+    touchControls.classList.toggle('is-game', inGame);
+    touchControls.classList.toggle('is-menu', !inGame);
+    const label = inGame ? '⬆' : 'ENTER';
+    if (jumpBtn.textContent !== label) jumpBtn.textContent = label;
+    jumpBtn.setAttribute('aria-label', inGame ? 'Bounce' : 'Enter');
+  }
+  syncTouchControls();
+
   const FIXED = 30;
   let acc = 0, last = performance.now();
 
@@ -89,6 +104,7 @@ async function boot() {
   function frame(now: number) {
     const dt = Math.min(100, now - last);
     last = now;
+    syncTouchControls();
     handleMenuKeys();
     if (game.state === 'game') {
       acc += dt;

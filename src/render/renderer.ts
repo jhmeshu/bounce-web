@@ -1,7 +1,7 @@
 import * as PIXI from 'pixi.js';
 import {
   SCREEN_WIDTH, SCREEN_HEIGHT, HUD_HEIGHT, TILE_SIZE, COL,
-  BallState, SizeState, MAX_LEVEL
+  BallState, SizeState, MAX_LEVEL, getMobileZoom
 } from '../core/constants';
 import { TILE_DB, TF } from '../core/tiles';
 import { LevelData, tileRawAt } from '../core/level';
@@ -15,6 +15,10 @@ const RENDER_WIDTH = SCREEN_WIDTH * HD_SCALE;   // 960
 const RENDER_HEIGHT = SCREEN_HEIGHT * HD_SCALE; // 544
 
 function abgr(hex: number) { return hex & 0xffffff; }
+
+function isCompactLayout() {
+  return getMobileZoom() > 1;
+}
 
 export class Renderer {
   app!: PIXI.Application;
@@ -91,15 +95,16 @@ export class Renderer {
       // Fallback if asset is missing; HD vector mode does not require raster atlas
     }
 
-    // Set up layer hierarchy
+    // Set up layer hierarchy — water sits behind bricks so its
+    // extended edges seal under them instead of tinting them.
     this.gameLayer.scale.set(HD_SCALE, HD_SCALE);
     this.gameLayer.addChild(
       this.bgLayer,
+      this.waterLayer,
       this.staticLayer,
       this.exitLayer,
       this.dynLayer,
       this.hazardLayer,
-      this.waterLayer,
       this.shadowGfx,
       this.ballGfx,
       this.ballAuraGfx,
@@ -135,8 +140,8 @@ export class Renderer {
     // High definition background
     const W = lvl.width * TILE_SIZE, H = lvl.height * TILE_SIZE;
     this.bgLayer.clear();
-    // Warm retro textured stone background
-    this.bgLayer.rect(0, 0, W, H).fill(abgr(COL.background));
+    // Warm retro textured stone background extending past level edges for cropped view
+    this.bgLayer.rect(-600, -600, W + 1200, H + 1200).fill(abgr(COL.background));
 
     // Subtle grid/stone seams
     for (let y = 0; y < lvl.height; y++) {
@@ -210,9 +215,18 @@ export class Renderer {
         this.screenShake *= 0.86;
       }
 
+      // Zoom: mobile ≈2x (visible 240×136 game units), desktop 1x (480×272).
+      // gameLayer is scaled by HD_SCALE × zoom so the world fills the
+      // 960×544 canvas. HUD/UI are also enlarged ~2x on mobile (see
+      // panel/drawUi/drawToast) so menus match the in-game zoom.
+      const effScale = HD_SCALE * getMobileZoom();
+      this.gameLayer.scale.set(effScale, effScale);
+      // Snap to whole render pixels so tile edges stay pixel-aligned
+      // (fractional camera positions otherwise antialias a hairline gap
+      // between every tile / between water and brick).
       this.gameLayer.position.set(
-        (-this.smoothCamX + shakeX) * HD_SCALE,
-        (-this.smoothCamY + shakeY) * HD_SCALE
+        Math.round((-this.smoothCamX + shakeX) * effScale),
+        Math.round((-this.smoothCamY + shakeY) * effScale)
       );
 
       this.bakeStatic(lvl);
@@ -370,42 +384,56 @@ export class Renderer {
     g.clear();
 
     const t = this.animTime * 4;
+    // Overlap: extend every water fill past its tile bounds so neighbouring
+    // tiles (water↔water, water↔brick) share an opaque overlap instead of
+    // leaving an antialiased hairline / wave-dip gap showing the background.
+    // Water is now drawn behind bricks, so the overlap under a brick is
+    // hidden and an opaque fill avoids double-blending darker seams.
+    const OVER = 1;
+    const TOP_LIFT = 2; // > wave amplitude (1.6) so the surface always
+    // reaches a brick directly above it (hidden behind that brick).
 
     for (let y = 0; y < lvl.height; y++) {
       for (let x = 0; x < lvl.width; x++) {
         const raw = tileRawAt(lvl, x, y);
         if ((raw & 0x40) === 0) continue;
-        // Only empty cells render water — submerged tiles (ramps, spikes, hoops)
-        // are drawn normally by their own layers, water sits behind them.
-        if ((raw & 0x3f) !== 0) continue;
+        // Draw water for EVERY water-flag cell, not just empty ones.
+        // Water sits behind the static/dynamic layers, so a submerged
+        // brick/ramp/spike/hoop covers the water under its solid part
+        // while its transparent parts (ramp triangle, spike gaps, hoop
+        // opening) show water instead of a beige background gap.
 
         const wx = x * TILE_SIZE, wy = y * TILE_SIZE;
         const aboveRaw = y === 0 ? 0 : tileRawAt(lvl, x, y - 1);
-        const isSurface = (aboveRaw & 0x40) === 0 || (aboveRaw & 0x3f) !== 0;
+        const isSurface = (aboveRaw & 0x40) === 0;
 
         if (isSurface) {
-          // Dynamic sine wave surface
-          const waveY0 = Math.sin((wx + t * 4) * 0.35) * 1.6;
-          const waveY1 = Math.sin((wx + TILE_SIZE + t * 4) * 0.35) * 1.6;
+          const x0 = wx - OVER, x1 = wx + TILE_SIZE + OVER;
+          const waveY0 = Math.sin((x0 + t * 4) * 0.35) * 1.6;
+          const waveY1 = Math.sin((x1 + t * 4) * 0.35) * 1.6;
 
           g.poly([
-            wx, wy + waveY0,
-            wx + TILE_SIZE, wy + waveY1,
-            wx + TILE_SIZE, wy + TILE_SIZE,
-            wx, wy + TILE_SIZE
-          ], true).fill({ color: 0x0277bd, alpha: 0.65 });
+            x0, wy + waveY0 - TOP_LIFT,
+            x1, wy + waveY1 - TOP_LIFT,
+            x1, wy + TILE_SIZE + OVER,
+            x0, wy + TILE_SIZE + OVER
+          ], true).fill(0x0277bd);
 
-          // Foam crest line
-          g.moveTo(wx, wy + waveY0)
-            .lineTo(wx + TILE_SIZE, wy + waveY1)
+          // Foam crest line on the (lifted) surface, cell-span only so
+          // neighbouring tiles don't double-draw it.
+          const crestY0 = Math.sin((wx + t * 4) * 0.35) * 1.6;
+          const crestY1 = Math.sin((wx + TILE_SIZE + t * 4) * 0.35) * 1.6;
+          g.moveTo(wx, wy + crestY0 - TOP_LIFT)
+            .lineTo(wx + TILE_SIZE, wy + crestY1 - TOP_LIFT)
             .stroke({ width: 1.2, color: 0xb3e5fc, alpha: 0.85 });
         } else {
-          // Deep water body
-          g.rect(wx, wy, TILE_SIZE, TILE_SIZE).fill({ color: 0x01579b, alpha: 0.72 });
+          // Deep water body — extended on all sides to seal seams.
+          g.rect(wx - OVER, wy - OVER, TILE_SIZE + OVER * 2, TILE_SIZE + OVER * 2).fill(0x01579b);
         }
 
-        // Ambient bubbles
-        if (isSurface && Math.random() < 0.02) {
+        // Ambient bubbles — only from open water, not from inside
+        // a submerged solid tile (its cell body is covered by the tile).
+        if (isSurface && (raw & 0x3f) === 0 && Math.random() < 0.02) {
           this.particles.emitBubble(wx + Math.random() * 12, wy + 8);
         }
       }
@@ -504,6 +532,7 @@ export class Renderer {
     const h = this.hudRoot;
     h.removeChildren();
 
+    const isMobile = isCompactLayout();
     const HUD_H = HUD_HEIGHT * HD_SCALE; // 34px
     const y0 = RENDER_HEIGHT - HUD_H;
     const W = RENDER_WIDTH;
@@ -519,101 +548,182 @@ export class Renderer {
     const lvl = this.game.level!;
     const remainRings = Math.max(0, lvl.totalRings - this.game.numRings);
 
-    // 1. Ring Counter (Left)
-    const ringGfx = new PIXI.Graphics();
-    // 3D golden ring icon
-    ringGfx.circle(20, y0 + 17, 7).stroke({ width: 2.2, color: 0xffc107 });
-    ringGfx.circle(20, y0 + 17, 5).stroke({ width: 0.8, color: 0xfff9c4 });
-    ringGfx.circle(18, y0 + 15, 1.2).fill(0xffffff);
-    h.addChild(ringGfx);
+    if (isMobile) {
+      // MOBILE COMPACT HUD: Concentrated in the visible center span (±130px from W/2)
+      const cx = W / 2;
 
-    const ringText = new PIXI.Text({
-      text: `RINGS: ${remainRings}`,
-      style: {
-        fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-        fontSize: 13,
-        fontWeight: 'bold',
-        fill: remainRings === 0 ? 0x00e676 : 0xffd54f,
-      }
-    });
-    ringText.x = 34;
-    ringText.y = y0 + 9;
-    h.addChild(ringText);
+      // 1. Ring Counter (Left of center)
+      const ringGfx = new PIXI.Graphics();
+      ringGfx.circle(cx - 108, y0 + 17, 7).stroke({ width: 2.2, color: 0xffc107 });
+      ringGfx.circle(cx - 108, y0 + 17, 5).stroke({ width: 0.8, color: 0xfff9c4 });
+      ringGfx.circle(cx - 110, y0 + 15, 1.2).fill(0xffffff);
+      h.addChild(ringGfx);
 
-    // 2. Arcade Digital Score (Center)
-    const scoreText = new PIXI.Text({
-      text: String(this.game.score).padStart(8, '0'),
-      style: {
-        fontFamily: "monospace",
-        fontSize: 17,
-        fontWeight: 'bold',
-        fill: 0xffffff,
-        letterSpacing: 2,
-      }
-    });
-    scoreText.x = W / 2 - scoreText.width / 2;
-    scoreText.y = y0 + 7;
-    h.addChild(scoreText);
-
-    // 3. Power-Up Status Bar (Center-Right)
-    const maxBonus = Math.max(
-      this.game.player.speedBonusCntr,
-      this.game.player.gravBonusCntr,
-      this.game.player.jumpBonusCntr
-    );
-    if (maxBonus > 0) {
-      const bx = W / 2 + 130, by = y0 + 11;
-      const bw = 100, bh = 12;
-      const barGfx = new PIXI.Graphics();
-      barGfx.roundRect(bx, by, bw, bh, 4).fill(0x1a233a);
-      barGfx.roundRect(bx, by, bw, bh, 4).stroke({ width: 1, color: 0x4fc3f7 });
-
-      const fillW = Math.max(0, (bw - 2) * (maxBonus / 300));
-      barGfx.roundRect(bx + 1, by + 1, fillW, bh - 2, 3).fill(0xff7043);
-      h.addChild(barGfx);
-
-      const label = this.game.player.speedBonusCntr > 0 ? 'SPEED' :
-                    this.game.player.gravBonusCntr > 0 ? 'GRAVITY' : 'JUMP';
-      const bonusLabel = new PIXI.Text({
-        text: label,
-        style: { fontFamily: 'sans-serif', fontSize: 9, fontWeight: 'bold', fill: 0xffffff }
+      const ringText = new PIXI.Text({
+        text: `${remainRings}`,
+        style: {
+          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+          fontSize: 14,
+          fontWeight: 'bold',
+          fill: remainRings === 0 ? 0x00e676 : 0xffd54f,
+        }
       });
-      bonusLabel.x = bx + bw / 2 - bonusLabel.width / 2;
-      bonusLabel.y = by - 1;
-      h.addChild(bonusLabel);
-    }
+      ringText.x = cx - 96;
+      ringText.y = y0 + 8;
+      h.addChild(ringText);
 
-    // 4. Lives Counter (Right)
-    const livesX = W - 30;
-    const livesGfx = new PIXI.Graphics();
-    for (let i = 0; i < Math.max(0, this.game.numLives); i++) {
-      const lx = livesX - i * 18;
-      const ly = y0 + 17;
-      // 3D Mini Red Ball
-      livesGfx.circle(lx, ly, 6).fill(0xd32f2f);
-      livesGfx.circle(lx - 2, ly - 2, 2.5).fill(0xff8a80);
-      livesGfx.circle(lx - 2.5, ly - 2.5, 1).fill(0xffffff);
-      livesGfx.circle(lx, ly, 6).stroke({ width: 0.8, color: 0x5d0000 });
-    }
-    h.addChild(livesGfx);
+      // 2. Score (Dead center)
+      const scoreText = new PIXI.Text({
+        text: String(this.game.score).padStart(6, '0'),
+        style: {
+          fontFamily: "monospace",
+          fontSize: 16,
+          fontWeight: 'bold',
+          fill: 0xffffff,
+          letterSpacing: 2,
+        }
+      });
+      scoreText.x = cx - scoreText.width / 2;
+      scoreText.y = y0 + 7;
+      h.addChild(scoreText);
 
-    const livesLabel = new PIXI.Text({
-      text: 'LIVES:',
-      style: {
-        fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-        fontSize: 12,
-        fontWeight: 'bold',
-        fill: 0xb0bec5
+      // 3. Lives Counter (Right of center)
+      const livesGfx = new PIXI.Graphics();
+      const numLives = Math.max(0, this.game.numLives);
+      for (let i = 0; i < numLives; i++) {
+        const lx = cx + 75 + i * 15;
+        const ly = y0 + 17;
+        livesGfx.circle(lx, ly, 5.5).fill(0xd32f2f);
+        livesGfx.circle(lx - 2, ly - 2, 2).fill(0xff8a80);
+        livesGfx.circle(lx - 2, ly - 2, 0.8).fill(0xffffff);
+        livesGfx.circle(lx, ly, 5.5).stroke({ width: 0.8, color: 0x5d0000 });
       }
-    });
-    livesLabel.x = livesX - (Math.max(0, this.game.numLives) * 18) - livesLabel.width - 6;
-    livesLabel.y = y0 + 9;
-    h.addChild(livesLabel);
+      h.addChild(livesGfx);
+
+      // 4. Power-Up Status Bar (Compact above HUD in center)
+      const maxBonus = Math.max(
+        this.game.player.speedBonusCntr,
+        this.game.player.gravBonusCntr,
+        this.game.player.jumpBonusCntr
+      );
+      if (maxBonus > 0) {
+        const bw = 90, bh = 10;
+        const bx = cx - bw / 2, by = y0 - 14;
+        const barGfx = new PIXI.Graphics();
+        barGfx.roundRect(bx, by, bw, bh, 3).fill(0x1a233a);
+        barGfx.roundRect(bx, by, bw, bh, 3).stroke({ width: 1, color: 0x4fc3f7 });
+
+        const fillW = Math.max(0, (bw - 2) * (maxBonus / 300));
+        barGfx.roundRect(bx + 1, by + 1, fillW, bh - 2, 2).fill(0xff7043);
+        h.addChild(barGfx);
+
+        const label = this.game.player.speedBonusCntr > 0 ? 'SPEED' :
+                      this.game.player.gravBonusCntr > 0 ? 'GRAV' : 'JUMP';
+        const bonusLabel = new PIXI.Text({
+          text: label,
+          style: { fontFamily: 'sans-serif', fontSize: 8, fontWeight: 'bold', fill: 0xffffff }
+        });
+        bonusLabel.x = bx + bw / 2 - bonusLabel.width / 2;
+        bonusLabel.y = by - 1;
+        h.addChild(bonusLabel);
+      }
+    } else {
+      // DESKTOP WIDE HUD
+      // 1. Ring Counter (Left)
+      const ringGfx = new PIXI.Graphics();
+      ringGfx.circle(20, y0 + 17, 7).stroke({ width: 2.2, color: 0xffc107 });
+      ringGfx.circle(20, y0 + 17, 5).stroke({ width: 0.8, color: 0xfff9c4 });
+      ringGfx.circle(18, y0 + 15, 1.2).fill(0xffffff);
+      h.addChild(ringGfx);
+
+      const ringText = new PIXI.Text({
+        text: `RINGS: ${remainRings}`,
+        style: {
+          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+          fontSize: 13,
+          fontWeight: 'bold',
+          fill: remainRings === 0 ? 0x00e676 : 0xffd54f,
+        }
+      });
+      ringText.x = 34;
+      ringText.y = y0 + 9;
+      h.addChild(ringText);
+
+      // 2. Arcade Digital Score (Center)
+      const scoreText = new PIXI.Text({
+        text: String(this.game.score).padStart(8, '0'),
+        style: {
+          fontFamily: "monospace",
+          fontSize: 17,
+          fontWeight: 'bold',
+          fill: 0xffffff,
+          letterSpacing: 2,
+        }
+      });
+      scoreText.x = W / 2 - scoreText.width / 2;
+      scoreText.y = y0 + 7;
+      h.addChild(scoreText);
+
+      // 3. Power-Up Status Bar (Center-Right)
+      const maxBonus = Math.max(
+        this.game.player.speedBonusCntr,
+        this.game.player.gravBonusCntr,
+        this.game.player.jumpBonusCntr
+      );
+      if (maxBonus > 0) {
+        const bx = W / 2 + 130, by = y0 + 11;
+        const bw = 100, bh = 12;
+        const barGfx = new PIXI.Graphics();
+        barGfx.roundRect(bx, by, bw, bh, 4).fill(0x1a233a);
+        barGfx.roundRect(bx, by, bw, bh, 4).stroke({ width: 1, color: 0x4fc3f7 });
+
+        const fillW = Math.max(0, (bw - 2) * (maxBonus / 300));
+        barGfx.roundRect(bx + 1, by + 1, fillW, bh - 2, 3).fill(0xff7043);
+        h.addChild(barGfx);
+
+        const label = this.game.player.speedBonusCntr > 0 ? 'SPEED' :
+                      this.game.player.gravBonusCntr > 0 ? 'GRAVITY' : 'JUMP';
+        const bonusLabel = new PIXI.Text({
+          text: label,
+          style: { fontFamily: 'sans-serif', fontSize: 9, fontWeight: 'bold', fill: 0xffffff }
+        });
+        bonusLabel.x = bx + bw / 2 - bonusLabel.width / 2;
+        bonusLabel.y = by - 1;
+        h.addChild(bonusLabel);
+      }
+
+      // 4. Lives Counter (Right)
+      const livesX = W - 30;
+      const livesGfx = new PIXI.Graphics();
+      for (let i = 0; i < Math.max(0, this.game.numLives); i++) {
+        const lx = livesX - i * 18;
+        const ly = y0 + 17;
+        livesGfx.circle(lx, ly, 6).fill(0xd32f2f);
+        livesGfx.circle(lx - 2, ly - 2, 2.5).fill(0xff8a80);
+        livesGfx.circle(lx - 2.5, ly - 2.5, 1).fill(0xffffff);
+        livesGfx.circle(lx, ly, 6).stroke({ width: 0.8, color: 0x5d0000 });
+      }
+      h.addChild(livesGfx);
+
+      const livesLabel = new PIXI.Text({
+        text: 'LIVES:',
+        style: {
+          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+          fontSize: 12,
+          fontWeight: 'bold',
+          fill: 0xb0bec5
+        }
+      });
+      livesLabel.x = livesX - (Math.max(0, this.game.numLives) * 18) - livesLabel.width - 6;
+      livesLabel.y = y0 + 9;
+      h.addChild(livesLabel);
+    }
   }
 
   drawToast(msg: string) {
+    const isMobile = isCompactLayout();
     const banner = new PIXI.Graphics();
-    const bw = 380, bh = 32;
+    const bw = isMobile ? 460 : 380, bh = isMobile ? 48 : 32;
     const bx = RENDER_WIDTH / 2 - bw / 2;
     const by = 20;
 
@@ -626,18 +736,19 @@ export class Renderer {
       text: msg,
       style: {
         fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-        fontSize: 13,
+        fontSize: isMobile ? 20 : 13,
         fontWeight: 'bold',
         fill: 0xffeb3b,
         letterSpacing: 1,
       }
     });
     t.x = RENDER_WIDTH / 2 - t.width / 2;
-    t.y = by + 7;
+    t.y = isMobile ? by + 10 : by + 7;
     this.hudRoot.addChild(t);
   }
 
   panel(title: string, lines: string[], footer: string): void {
+    const isMobile = isCompactLayout();
     const ui = this.uiRoot;
     ui.removeChildren();
 
@@ -646,8 +757,8 @@ export class Renderer {
     bg.rect(0, 0, RENDER_WIDTH, RENDER_HEIGHT).fill(0x0f1123);
     ui.addChild(bg);
 
-    // Modern Frosted Card
-    const pw = 560, ph = 320;
+    // Modern Frosted Card — mobile ~2x (was 260×320 / 20 / 12 / 11)
+    const pw = isMobile ? 480 : 560, ph = isMobile ? 380 : 320;
     const px = (RENDER_WIDTH - pw) / 2, py = (RENDER_HEIGHT - ph) / 2;
     const card = new PIXI.Graphics();
     card.roundRect(px, py, pw, ph, 16)
@@ -660,18 +771,18 @@ export class Renderer {
       text: title,
       style: {
         fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-        fontSize: 28,
+        fontSize: isMobile ? 36 : 28,
         fontWeight: 'bold',
         fill: 0xffffff,
       }
     });
     t.x = RENDER_WIDTH / 2 - t.width / 2;
-    t.y = py + 22;
+    t.y = py + (isMobile ? 28 : 22);
     ui.addChild(t);
 
     // Decorative underline
     const line = new PIXI.Graphics();
-    line.rect(RENDER_WIDTH / 2 - 40, py + 62, 80, 2).fill(0x00e5ff);
+    line.rect(RENDER_WIDTH / 2 - 40, py + (isMobile ? 72 : 62), 80, 2).fill(0x00e5ff);
     ui.addChild(line);
 
     // Body Lines
@@ -680,12 +791,15 @@ export class Renderer {
         text: ln,
         style: {
           fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: 16,
+          fontSize: isMobile ? 20 : 16,
           fill: (i === 0 && title.includes('OVER')) ? 0xff5252 : 0xce93d8,
+          wordWrap: isMobile,
+          wordWrapWidth: isMobile ? 430 : 500,
+          align: 'center',
         }
       });
       s.x = RENDER_WIDTH / 2 - s.width / 2;
-      s.y = py + 85 + i * 32;
+      s.y = py + (isMobile ? 92 : 85) + i * (isMobile ? 38 : 32);
       ui.addChild(s);
     });
 
@@ -694,16 +808,17 @@ export class Renderer {
       text: footer,
       style: {
         fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-        fontSize: 14,
+        fontSize: isMobile ? 18 : 14,
         fill: 0x90a4ae
       }
     });
     f.x = RENDER_WIDTH / 2 - f.width / 2;
-    f.y = py + ph - 42;
+    f.y = py + ph - (isMobile ? 48 : 42);
     ui.addChild(f);
   }
 
   drawUi() {
+    const isMobile = isCompactLayout();
     const g = this.game;
     const ui = this.uiRoot;
     ui.removeChildren();
@@ -713,67 +828,68 @@ export class Renderer {
       bg.rect(0, 0, RENDER_WIDTH, RENDER_HEIGHT).fill(0x0c102b);
       ui.addChild(bg);
 
-      // Animated floating 3D ball
-      const ballBounceY = 150 + Math.sin(this.animTime * 3) * 20;
+      // Animated floating 3D ball — mobile ~2x (radius 32→52)
+      const ballBounceY = isMobile ? 170 + Math.sin(this.animTime * 3) * 22 : 150 + Math.sin(this.animTime * 3) * 20;
+      const ballR = isMobile ? 52 : 32;
       const ball = new PIXI.Graphics();
-      ball.circle(RENDER_WIDTH / 2, ballBounceY, 32).fill(0x8a0b12);
-      ball.circle(RENDER_WIDTH / 2 - 6, ballBounceY - 6, 28).fill(0xd32f2f);
-      ball.circle(RENDER_WIDTH / 2 - 12, ballBounceY - 12, 18).fill(0xf44336);
-      ball.circle(RENDER_WIDTH / 2 - 16, ballBounceY - 16, 8).fill(0xffffff);
-      ball.circle(RENDER_WIDTH / 2, ballBounceY, 32).stroke({ width: 2, color: 0x4a0508 });
+      ball.circle(RENDER_WIDTH / 2, ballBounceY, ballR).fill(0x8a0b12);
+      ball.circle(RENDER_WIDTH / 2 - 6, ballBounceY - 6, ballR * 0.88).fill(0xd32f2f);
+      ball.circle(RENDER_WIDTH / 2 - 12, ballBounceY - 12, ballR * 0.56).fill(0xf44336);
+      ball.circle(RENDER_WIDTH / 2 - 16, ballBounceY - 16, ballR * 0.25).fill(0xffffff);
+      ball.circle(RENDER_WIDTH / 2, ballBounceY, ballR).stroke({ width: 2, color: 0x4a0508 });
       ui.addChild(ball);
 
       const t = new PIXI.Text({
         text: 'BOUNCE ZERO HD',
         style: {
           fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: 48,
+          fontSize: isMobile ? 52 : 48,
           fontWeight: '900',
           fill: 0xffffff,
-          letterSpacing: 3,
+          letterSpacing: isMobile ? 2 : 3,
         }
       });
       t.x = RENDER_WIDTH / 2 - t.width / 2;
-      t.y = 230;
+      t.y = isMobile ? 268 : 230;
       ui.addChild(t);
 
       const sub = new PIXI.Text({
-        text: 'Press Enter to Play',
+        text: isMobile ? 'Press Jump or Enter' : 'Press Enter to Play',
         style: {
           fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: 16,
+          fontSize: isMobile ? 22 : 16,
           fill: 0x4fc3f7,
         }
       });
       sub.x = RENDER_WIDTH / 2 - sub.width / 2;
-      sub.y = 300;
+      sub.y = isMobile ? 352 : 300;
       ui.addChild(sub);
     } else if (g.state === 'menu') {
       const bg = new PIXI.Graphics();
       bg.rect(0, 0, RENDER_WIDTH, RENDER_HEIGHT).fill(0x0d1124);
       ui.addChild(bg);
 
-      // Header
+      // Header — mobile ~2x (32→52)
       const title = new PIXI.Text({
         text: 'BOUNCE HD',
         style: {
           fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: 44,
+          fontSize: isMobile ? 52 : 44,
           fontWeight: 'bold',
           fill: 0xff5252,
           letterSpacing: 2,
         }
       });
       title.x = RENDER_WIDTH / 2 - title.width / 2;
-      title.y = 50;
+      title.y = isMobile ? 36 : 50;
       ui.addChild(title);
 
       const items = ['Continue', 'New game', 'Select level', 'High score', 'Instructions'];
       items.forEach((label, i) => {
         const sel = g.menuSel === i;
         const disabled = i === 0 && !g.savedInProgress;
-        const btnY = 150 + i * 54;
-        const btnW = 340, btnH = 42;
+        const btnY = isMobile ? 130 + i * 68 : 150 + i * 54;
+        const btnW = isMobile ? 400 : 340, btnH = isMobile ? 58 : 42;
         const btnX = RENDER_WIDTH / 2 - btnW / 2;
 
         const btnGfx = new PIXI.Graphics();
@@ -792,13 +908,13 @@ export class Renderer {
           text: label,
           style: {
             fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-            fontSize: 18,
+            fontSize: isMobile ? 24 : 18,
             fontWeight: sel ? 'bold' : 'normal',
             fill: disabled ? 0x616161 : sel ? 0xffffff : 0xcfd8dc,
           }
         });
         t.x = RENDER_WIDTH / 2 - t.width / 2;
-        t.y = btnY + 9;
+        t.y = btnY + (isMobile ? 14 : 9);
         ui.addChild(t);
       });
     } else if (g.state === 'levelselect') {
@@ -810,8 +926,9 @@ export class Renderer {
       const words = page.split(' ');
       const lines: string[] = [];
       let cur = '';
+      const maxChars = isMobile ? 38 : 55;
       for (const w of words) {
-        if ((cur + ' ' + w).length > 55) { lines.push(cur); cur = w; }
+        if ((cur + ' ' + w).length > maxChars) { lines.push(cur); cur = w; }
         else cur = cur ? cur + ' ' + w : w;
       }
       if (cur) lines.push(cur);

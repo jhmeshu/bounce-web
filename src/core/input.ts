@@ -51,6 +51,8 @@ export class Input {
     });
     this.bindTouch('btn-left', BTN.Left);
     this.bindTouch('btn-right', BTN.Right);
+    this.bindTouch('btn-up', BTN.Up);
+    this.bindTouch('btn-down', BTN.Down);
     this.bindTouch('btn-jump', BTN.Cross);
     this.bindTouch('btn-pause', BTN.Start);
   }

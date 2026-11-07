@@ -1,4 +1,4 @@
-import { SCREEN_WIDTH, SCREEN_HEIGHT, HUD_HEIGHT, TILE_SIZE, Player, BallState, SizeState, MAX_LEVEL, RING_POINTS, GEM_POINTS, LIFE_POINTS, EXIT_POINTS } from './constants';
+import { SCREEN_WIDTH, SCREEN_HEIGHT, HUD_HEIGHT, TILE_SIZE, Player, BallState, SizeState, MAX_LEVEL, RING_POINTS, GEM_POINTS, LIFE_POINTS, EXIT_POINTS, getMobileZoom } from './constants';
 import { LevelData, loadLevel, setTileId, updateMovingObjects } from './level';
 import { playerInit, playerUpdate, setDir, releaseDir, PhysicsHooks } from './physics';
 import { MoveDir } from './constants';
@@ -127,12 +127,17 @@ export class Game {
   }
   isLevelSmall() {
     if (!this.level) return true;
-    return this.level.height * TILE_SIZE < (SCREEN_HEIGHT - HUD_HEIGHT);
+    const zoom = getMobileZoom();
+    const gameH = (SCREEN_HEIGHT - HUD_HEIGHT) / zoom;
+    return this.level.height * TILE_SIZE < gameH;
   }
   calcCamera() {
     if (!this.level) return;
-    const gameH = SCREEN_HEIGHT - HUD_HEIGHT;
-    let cx = this.player.xPos - SCREEN_WIDTH / 2;
+    const zoom = getMobileZoom();
+    const viewW = SCREEN_WIDTH / zoom;
+    const viewH = SCREEN_HEIGHT / zoom;
+    const gameH = viewH - HUD_HEIGHT / zoom;
+    let cx = this.player.xPos - viewW / 2;
     if (!this.camInit) { this.camY = this.player.yPos - gameH / 2; this.camInit = true; }
     if (!this.isLevelSmall()) {
       const top = Math.floor(gameH * 0.30), bottom = gameH - top;
@@ -140,7 +145,7 @@ export class Game {
       if (sy < top) this.camY = this.player.yPos - top;
       else if (sy > bottom) this.camY = this.player.yPos - bottom;
     }
-    const maxX = this.level.width * TILE_SIZE - SCREEN_WIDTH;
+    const maxX = this.level.width * TILE_SIZE - viewW;
     const maxY = this.level.height * TILE_SIZE - gameH;
     if (cx < 0) cx = 0; if (maxX > 0 && cx > maxX) cx = maxX; if (maxX <= 0) cx = 0;
     let cy: number;
@@ -150,9 +155,11 @@ export class Game {
   }
   exitVisible(): boolean {
     if (!this.level) return false;
+    const zoom = getMobileZoom();
+    const viewW = SCREEN_WIDTH / zoom;
+    const gameH = (SCREEN_HEIGHT - HUD_HEIGHT) / zoom;
     const ex = this.level.exitPosX * TILE_SIZE, ey = this.level.exitPosY * TILE_SIZE;
-    const gameH = SCREEN_HEIGHT - HUD_HEIGHT;
-    return ex < this.camX + SCREEN_WIDTH && ex + 24 > this.camX && ey < this.camY + gameH && ey + 24 > this.camY;
+    return ex < this.camX + viewW && ex + 24 > this.camX && ey < this.camY + gameH && ey + 24 > this.camY;
   }
   updateFixed() {
     const inp = this.input;

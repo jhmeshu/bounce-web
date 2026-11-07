@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Bounce Zero — Browser (PixiJS)</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
@@ -15,12 +15,17 @@
             <button id="btn-left" aria-label="Left">◀</button>
             <button id="btn-right" aria-label="Right">▶</button>
           </div>
+          <div class="tc-middle">
+            <button id="btn-up" class="btn-updown" aria-label="Up">▲</button>
+            <button id="btn-pause" aria-label="Pause">II</button>
+            <button id="btn-down" class="btn-updown" aria-label="Down">▼</button>
+          </div>
           <div class="tc-right">
             <button id="btn-jump" aria-label="Bounce">⬆</button>
-            <button id="btn-pause" aria-label="Pause">II</button>
           </div>
         </div>
         <div id="hint">← → / A D move · Space / ↑ bounce · Enter select · P pause · L+R cheat</div>
+        <div id="rotate-hint">Tip: rotate your phone for a bigger view</div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -88,6 +88,15 @@ export const COL = {
   exitFourth: 0xc2848e,
 };
 
+// Mobile (≈2x zoom): narrow screens or touch-primary devices see half the
+// world width/height (240×136 game units instead of 480×272), so the ball
+// renders about twice as large. Desktop / mouse stays at 1x full view.
+export function getMobileZoom(): number {
+  if (typeof window === 'undefined') return 1;
+  const coarse = typeof window.matchMedia !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
+  return (coarse || window.innerWidth <= 768) ? 2 : 1;
+}
+
 export enum MoveDir { Left = 1, Right = 2, Down = 4, Up = 8 }
 export enum BallState { Normal = 0, Dead = 1, Popped = 2 }
 export enum SizeState { Small = 0, Large = 1 }
@@ -105,4 +114,5 @@ export interface Player {
   popCntr: number; slideCntr: number;
   isInWater: boolean;
   groundedTimer?: number;
+  slopeStuckCntr?: number; lastSlopeX?: number; lastSlopeY?: number;
 }

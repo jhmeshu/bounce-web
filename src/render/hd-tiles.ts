@@ -19,8 +19,9 @@ export class HDTileLibrary {
     // 1. Red Brick (Tile 1)
     {
       const ctx = new PIXI.GraphicsContext();
-      // Base brick body
-      ctx.rect(0, 0, s, s).fill(0xbf360c);
+      // Base brick body — extended 0.5px past the tile so adjacent
+      // bricks overlap instead of leaving an antialiased hairline gap.
+      ctx.rect(-0.5, -0.5, s + 1, s + 1).fill(0xbf360c);
       // Top/Left highlight bevel
       ctx.moveTo(0, s).lineTo(0, 0).lineTo(s, 0).lineTo(s - 1, 1).lineTo(1, 1).lineTo(1, s - 1).closePath()
         .fill(0xff7043);
@@ -39,8 +40,8 @@ export class HDTileLibrary {
     // 2. Blue Rubber Bouncy Block (Tile 2)
     {
       const ctx = new PIXI.GraphicsContext();
-      // Outer rubber body with bevel
-      ctx.rect(0, 0, s, s).fill(0x005bbb);
+      // Outer rubber body with bevel — extended 0.5px to seal seams.
+      ctx.rect(-0.5, -0.5, s + 1, s + 1).fill(0x005bbb);
       // Inner cushion
       ctx.roundRect(1, 1, s - 2, s - 2, 2).fill(0x0088ff);
       // Glossy highlight arc
@@ -469,7 +470,7 @@ export class HDTileLibrary {
     {
       const makeGravity = (rot: number) => {
         const ctx = new PIXI.GraphicsContext();
-        ctx.rect(0, 0, s, s).fill(0x0d47a1);
+        ctx.rect(-0.5, -0.5, s + 1, s + 1).fill(0x0d47a1);
         ctx.roundRect(1, 1, s - 2, s - 2, 2).stroke({ width: 0.75, color: 0x82b1ff });
         // Gravity vortex concentric rings
         ctx.circle(6, 6, 4.2).stroke({ width: 0.8, color: 0x448aff });
@@ -487,7 +488,7 @@ export class HDTileLibrary {
     {
       const makeJump = (rot: number) => {
         const ctx = new PIXI.GraphicsContext();
-        ctx.rect(0, 0, s, s).fill(0xe65100);
+        ctx.rect(-0.5, -0.5, s + 1, s + 1).fill(0xe65100);
         ctx.roundRect(1, 1, s - 2, s - 2, 2).stroke({ width: 0.75, color: 0xffd180 });
         // Hydraulic coiled spring arrows pointing up
         ctx.poly([6, 2, 3, 5, 5, 5, 5, 9, 7, 9, 7, 5, 9, 5], true).fill(0xffab00);

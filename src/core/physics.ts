@@ -322,12 +322,18 @@ function isAtGround(p: Player, lvl: LevelData, reverse: boolean): boolean {
     return false;
   }
   if ((p.groundedTimer ?? 0) > 0) return true;
-  // Probe 2px in gravity direction
+  // Probe 2px in gravity direction. This is only a ground check, so it
+  // must not steer the ball: triangleCollide redirects velocity on a
+  // slope, and without restoring it here every frame's probe maps
+  // (x,y) -> (-(y>>1), -(x>>1)) onto the -1,-1 fixed point — the ball
+  // sits on the slope with |v|<10 forever (never moves, never falls).
   const dy = reverse ? -2 : 2;
   const gx = p.globalBallX, prevGy = p.globalBallY;
+  const xs = p.xSpeed, ys = p.ySpeed;
   const rubber = p.mCDRubberFlag, ramp = p.mCDRampFlag;
   const blocked = !collisionDetection(p, lvl, p.xPos, p.yPos + dy, PROBE_HOOKS, true);
   p.globalBallX = gx; p.globalBallY = prevGy;
+  p.xSpeed = xs; p.ySpeed = ys;
   p.mCDRubberFlag = rubber; p.mCDRampFlag = ramp;
   return blocked;
 }
@@ -370,8 +376,15 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
   clampSpeed(p);
 
   const yIters = Math.floor(Math.abs(p.ySpeed) / MOVEMENT_STEP_DIVISOR);
+  let slidOffSlope = false;
   for (let i = 0; i < yIters; i++) {
     const yStep = p.ySpeed === 0 ? 0 : (p.ySpeed < 0 ? -1 : 1);
+    // Snapshot velocity: collision probes on a slope redirect it
+    // ((x,y)->(-(y>>1),-(x>>1))), so the Y probe plus two slide
+    // probes would compound back to ~0 and the ball never reaches
+    // |ySpeed|>=10 again — stuck like glue. Slide probes below are
+    // feasibility checks only; restore the fall speed after them.
+    const probeXs = p.xSpeed, probeYs = p.ySpeed;
     if (collisionDetection(p, lvl, p.xPos, p.yPos + yStep, hooks, false)) {
       p.yPos += yStep; p.mGroundedFlag = false;
       if (gravity === -30) {
@@ -384,9 +397,31 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
         }
       }
     } else {
-      if (p.mCDRampFlag && p.xSpeed < 10 && p.slideCntr === 0) {
-        if (collisionDetection(p, lvl, p.xPos + 1, p.yPos + yStep, hooks, false)) { p.xPos += 1; p.yPos += yStep; p.mCDRampFlag = false; }
-        else if (collisionDetection(p, lvl, p.xPos - 1, p.yPos + yStep, hooks, false)) { p.xPos -= 1; p.yPos += yStep; p.mCDRampFlag = false; }
+      // Falling onto a slope: slide diagonally down-slope instead of
+      // bouncing in place. Previously this only ran every 3rd frame
+      // (slideCntr === 0) and only at low xSpeed, then bounced anyway,
+      // so the ball sat grounded on the slope and got stuck.
+      // Now try every frame; a successful slide falls off the slope
+      // (gravity below is ~1/3) instead of bouncing.
+      const fallingToGround = yStep > 0 || (reverse && yStep < 0);
+      if (p.mCDRampFlag && fallingToGround) {
+        // Try down-slope diagonals; larger steps clear a riser / tip
+        // or large ball that a 1px diagonal still overlaps.
+        for (const d of [1, 2, 3, 6]) {
+          p.xSpeed = probeXs; p.ySpeed = probeYs;
+          if (collisionDetection(p, lvl, p.xPos + d, p.yPos + yStep * d, hooks, false)) { p.xPos += d; p.yPos += yStep * d; slidOffSlope = true; break; }
+          p.xSpeed = probeXs; p.ySpeed = probeYs;
+          if (collisionDetection(p, lvl, p.xPos - d, p.yPos + yStep * d, hooks, false)) { p.xPos -= d; p.yPos += yStep * d; slidOffSlope = true; break; }
+        }
+        // Keep the fall speed that brought us here (>=10) so the next
+        // frame slides again instead of rebuilding from ~0.
+        p.xSpeed = probeXs; p.ySpeed = probeYs;
+        if (slidOffSlope) {
+          p.mCDRampFlag = false;
+          p.mGroundedFlag = false;
+          p.groundedTimer = 0;
+          break;
+        }
       }
       if (yStep > 0 || (reverse && yStep < 0)) {
         p.ySpeed = Math.trunc(p.ySpeed * -1 / 2);
@@ -402,7 +437,16 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
       if (yStep < 0 || (reverse && yStep > 0)) p.ySpeed = reverse ? -ROOF_COLLISION_SPEED : ROOF_COLLISION_SPEED;
     }
   }
-  if (reverse) {
+  // Falling off a slope: about 1/3 gravity, so the ball accelerates
+  // gently down-slope and falls off instead of bouncing/sticking.
+  if (slidOffSlope) {
+    const slopeStep = Math.max(1, Math.trunc(Math.abs(step) / 3)) * (step < 0 ? -1 : 1);
+    if (reverse) {
+      if (p.ySpeed > gravity) { p.ySpeed += slopeStep; if (p.ySpeed < gravity) p.ySpeed = gravity; }
+    } else {
+      if (p.ySpeed < gravity) { p.ySpeed += slopeStep; if (p.ySpeed > gravity) p.ySpeed = gravity; }
+    }
+  } else if (reverse) {
     if (step === -2 && p.ySpeed < gravity) { p.ySpeed += step; if (p.ySpeed > gravity) p.ySpeed = gravity; }
     else if (!p.mGroundedFlag && p.ySpeed > gravity) { p.ySpeed += step; if (p.ySpeed < gravity) p.ySpeed = gravity; }
   } else {
@@ -426,13 +470,56 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
   const xIters = Math.floor(Math.abs(p.xSpeed) / MOVEMENT_STEP_DIVISOR);
   for (let i = 0; i < xIters; i++) {
     const xStep = p.xSpeed === 0 ? 0 : (p.xSpeed < 0 ? -1 : 1);
-    if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos, hooks, false)) p.xPos += xStep;
+    // Snapshot: main + diagonal probes on a slope each redirect
+    // velocity, compounding to ~0 when pushing into a slope (glue).
+    // Keep the pushing speed; only a clean wall hit reverses it.
+    const probeXs = p.xSpeed, probeYs = p.ySpeed;
+    if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos, hooks, false)) { p.xPos += xStep; }
     else if (p.mCDRampFlag) {
       p.mCDRampFlag = false;
-      const diag = reverse ? 1 : -1;
-      if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos + diag, hooks, false)) { p.xPos += xStep; p.yPos += diag; }
-      else if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos - diag, hooks, false)) { p.xPos += xStep; p.yPos -= diag; }
-      else p.xSpeed = -(p.xSpeed >> 1);
+      p.xSpeed = probeXs; p.ySpeed = probeYs;
+      // Prefer down-slope (gravity direction) first so a ball rolling
+      // down a slope keeps rolling down; up-slope is the fallback for
+      // climbing. Trying up first lifts it off the surface each step.
+      const downDir = reverse ? -1 : 1;
+      let diagMoved = false;
+      // Larger diagonals clear a stair riser when pressing into a
+      // slope (start-pit walls), so Left/Right climbs without jump.
+      for (const d of [1, 2, 3, 6]) {
+        p.xSpeed = probeXs; p.ySpeed = probeYs;
+        if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos + downDir * d, hooks, false)) { p.xPos += xStep; p.yPos += downDir * d; diagMoved = true; break; }
+        p.xSpeed = probeXs; p.ySpeed = probeYs;
+        if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos - downDir * d, hooks, false)) { p.xPos += xStep; p.yPos -= downDir * d; diagMoved = true; break; }
+      }
+      if (diagMoved) { p.xSpeed = probeXs; p.ySpeed = probeYs; }
+      else p.xSpeed = -(probeXs >> 1);
+    }
+  }
+
+  // Slope watchdog: a ball whose centre is on a ramp tile but whose
+  // position hasn't changed for ~1s is wedged (tip / pocket / riser
+  // where every 1px diagonal still overlaps). Nudge it to the nearest
+  // free spot so it rolls down on its own; Left/Right input then
+  // accelerates it or climbs. Flat/valley rest (centre not on a ramp)
+  // is left alone.
+  {
+    const ctx2 = Math.floor(p.xPos / TILE_SIZE), cty2 = Math.floor(p.yPos / TILE_SIZE);
+    const centreId = (ctx2 >= 0 && ctx2 < lvl.width && cty2 >= 0 && cty2 < lvl.height) ? (tileRawAt(lvl, ctx2, cty2) & TILE_ID_MASK) : 0;
+    const onSlope = centreId >= 30 && centreId <= 37;
+    if (onSlope && p.lastSlopeX === p.xPos && p.lastSlopeY === p.yPos) {
+      p.slopeStuckCntr = (p.slopeStuckCntr || 0) + 1;
+    } else {
+      p.slopeStuckCntr = 0;
+    }
+    p.lastSlopeX = p.xPos; p.lastSlopeY = p.yPos;
+    if (onSlope && (p.slopeStuckCntr || 0) > 30) {
+      const oldX = p.xPos;
+      if (findFreeSpot(p, lvl)) {
+        p.xSpeed = p.xPos > oldX ? MIN_BOUNCE_SPEED : (p.xPos < oldX ? -MIN_BOUNCE_SPEED : 0);
+        p.ySpeed = MIN_BOUNCE_SPEED;
+        p.mGroundedFlag = false;
+      }
+      p.slopeStuckCntr = 0;
     }
   }
 }
