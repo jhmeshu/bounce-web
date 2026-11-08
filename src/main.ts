@@ -5,6 +5,7 @@ import { Input, BTN } from './core/input';
 import { Renderer } from './render/renderer';
 import { audio } from './core/audio';
 import { MAX_LEVEL } from './core/constants';
+import { GestureController } from './core/gestures';
 
 async function boot() {
   const holder = document.getElementById('canvas-holder')!;
@@ -18,20 +19,68 @@ async function boot() {
   // preload level 1 into cache
   await game.ensureLevel(1);
 
-  // Touch controls mirror the game state: Up/Down + ENTER in menus,
-  // ⬆ jump in game, pause always in the middle.
-  const touchControls = document.getElementById('touch-controls');
-  const jumpBtn = document.getElementById('btn-jump');
-  function syncTouchControls() {
-    if (!touchControls || !jumpBtn) return;
+  // Invisible gesture layer; pause badge + D-Pad visibility mirror state.
+  const gestureLayer = document.getElementById('gesture-layer')!;
+  const pauseBadge = document.getElementById('pause-badge')!;
+  new GestureController(gestureLayer, input, pauseBadge);
+  const dpadControls = document.getElementById('dpad-controls')!;
+  const dpJump = document.getElementById('dp-jump')!;
+  function syncControlUI() {
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    document.body.dataset.control = game.controlMode;
+    pauseBadge.classList.toggle('visible', coarse && game.state === 'game');
+    dpadControls.hidden = !(game.controlMode === 'dpad' && coarse);
     const inGame = game.state === 'game';
-    touchControls.classList.toggle('is-game', inGame);
-    touchControls.classList.toggle('is-menu', !inGame);
+    dpadControls.classList.toggle('is-menu', !inGame);
     const label = inGame ? '⬆' : 'ENTER';
-    if (jumpBtn.textContent !== label) jumpBtn.textContent = label;
-    jumpBtn.setAttribute('aria-label', inGame ? 'Bounce' : 'Enter');
+    if (dpJump.textContent !== label) dpJump.textContent = label;
+    dpJump.setAttribute('aria-label', inGame ? 'Bounce' : 'Enter');
   }
-  syncTouchControls();
+  syncControlUI();
+
+  // First-run gesture tutorial (coarse pointers, gesture mode only).
+  const tutEl = document.getElementById('tutorial')!;
+  const tutArt = document.getElementById('tut-art')!;
+  const tutText = document.getElementById('tut-text')!;
+  const tutDots = document.getElementById('tut-dots')!;
+  const tutSkip = document.getElementById('tut-skip')!;
+  const isCoarse = () => window.matchMedia?.('(pointer: coarse)').matches ?? false;
+  let tutStep = -1;
+  let tutDone = false;
+  try { tutDone = localStorage.getItem('bounce_tut_seen') === '1'; } catch { /* ignore */ }
+  function tutFinish() {
+    tutStep = -1;
+    tutEl.hidden = true;
+    tutDone = true;
+    try { localStorage.setItem('bounce_tut_seen', '1'); } catch { /* ignore */ }
+  }
+  function tutShow(step: number) {
+    tutStep = step;
+    const steps = [
+      { art: '↔️', text: 'Drag ← → to move' },
+      { art: '👆', text: 'Tap anywhere to bounce' },
+      { art: '🙌', text: 'Swipe ↕ for menus · Two-finger tap pauses' },
+    ];
+    tutArt.textContent = steps[step].art;
+    tutText.textContent = steps[step].text;
+    tutDots.innerHTML = steps.map((_, i) => `<i class="${i === step ? 'on' : ''}"></i>`).join('');
+    tutEl.hidden = false;
+  }
+  tutSkip.addEventListener('click', tutFinish);
+  function tutorialTick() {
+    if (tutDone || !isCoarse() || game.controlMode !== 'gesture') return;
+    if (tutStep === -1) {
+      if (game.state === 'game') tutShow(0);
+      return;
+    }
+    if (tutStep === 0) {
+      if (input.held(BTN.Left) || input.held(BTN.Right)) tutShow(1);
+    } else if (tutStep === 1) {
+      if (input.pressedNow(BTN.Cross)) tutShow(2);
+    } else if (tutStep === 2) {
+      if (input.pressedNow(BTN.Cross)) tutFinish();
+    }
+  }
 
   const FIXED = 30;
   let acc = 0, last = performance.now();
@@ -73,6 +122,16 @@ async function boot() {
         input.consumePressed(BTN.Cross); input.consumePressed(BTN.Start);
         game.menuNav(false, false, true);
       }
+    } else if (st === 'settings') {
+      if (upHit) { input.consumePressed(BTN.Up); game.settingsSel = Math.max(0, game.settingsSel - 1); }
+      if (downHit) { input.consumePressed(BTN.Down); game.settingsSel = Math.min(1, game.settingsSel + 1); }
+      if (okHit) { input.consumePressed(BTN.Cross); game.setControl(game.settingsSel === 1 ? 'dpad' : 'gesture'); }
+      if (backHit || startHit) { input.consumePressed(BTN.Circle); input.consumePressed(BTN.Start); game.state = 'menu'; }
+    } else if (st === 'controlchoose') {
+      if (upHit) { input.consumePressed(BTN.Up); game.chooseSel = Math.max(0, game.chooseSel - 1); }
+      if (downHit) { input.consumePressed(BTN.Down); game.chooseSel = Math.min(2, game.chooseSel + 1); }
+      if (okHit) { input.consumePressed(BTN.Cross); game.chooseControl(game.chooseSel); }
+      if (backHit || startHit) { input.consumePressed(BTN.Circle); input.consumePressed(BTN.Start); game.state = 'menu'; }
     } else if (st === 'levelselect') {
       let sel = game.selectedLevel;
       const cols = 5;
@@ -95,7 +154,7 @@ async function boot() {
         if (game.selectedLevel < MAX_LEVEL) void game.startLevel(game.selectedLevel + 1, false);
         else { game.state = 'gameover'; }
       }
-      if (backHit) { input.consumePressed(BTN.Circle); game.state = 'menu'; }
+      if (backHit || downHit) { input.consumePressed(BTN.Circle); input.consumePressed(BTN.Down); game.state = 'menu'; }
     } else if (st === 'gameover') {
       if (okHit || startHit) { input.consumePressed(BTN.Cross); input.consumePressed(BTN.Start); game.state = 'menu'; }
     }
@@ -104,7 +163,8 @@ async function boot() {
   function frame(now: number) {
     const dt = Math.min(100, now - last);
     last = now;
-    syncTouchControls();
+    syncControlUI();
+    tutorialTick();
     handleMenuKeys();
     if (game.state === 'game') {
       acc += dt;

@@ -88,13 +88,18 @@ export const COL = {
   exitFourth: 0xc2848e,
 };
 
-// Mobile (≈2x zoom): narrow screens or touch-primary devices see half the
-// world width/height (240×136 game units instead of 480×272), so the ball
-// renders about twice as large. Desktop / mouse stays at 1x full view.
-export function getMobileZoom(): number {
-  if (typeof window === 'undefined') return 1;
+// View window (game units): desktop 480×272, touch-landscape 240×136,
+// touch-portrait 156×277 (taller, Nokia-style portrait view).
+export interface ViewSize { viewW: number; viewH: number }
+export function getViewSize(): ViewSize {
+  if (typeof window === 'undefined') return { viewW: SCREEN_WIDTH, viewH: SCREEN_HEIGHT };
   const coarse = typeof window.matchMedia !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
-  return (coarse || window.innerWidth <= 768) ? 2 : 1;
+  const isTouch = coarse || window.innerWidth <= 768;
+  if (!isTouch) return { viewW: SCREEN_WIDTH, viewH: SCREEN_HEIGHT };
+  return window.innerHeight >= window.innerWidth ? { viewW: 156, viewH: 277 } : { viewW: 240, viewH: 136 };
+}
+export function getMobileZoom(): number {
+  return SCREEN_WIDTH / getViewSize().viewW;
 }
 
 export enum MoveDir { Left = 1, Right = 2, Down = 4, Up = 8 }

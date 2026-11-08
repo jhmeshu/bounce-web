@@ -1,8 +1,5 @@
 :root {
-  /* Game internal aspect: 480 / 272 = 1.7647 */
   --game-aspect: 1.7647;
-  /* Desktop / default: fit width AND height so nothing overflows vertically */
-  --frame-w: min(96vw, 1100px, calc((100dvh - 64px) * var(--game-aspect)));
 }
 
 html, body {
@@ -10,439 +7,186 @@ html, body {
   padding: 0;
   height: 100%;
   height: 100dvh;
-  background: #1a1a2e;
+  background: #10101f;
   color: #eee;
   font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   overscroll-behavior: none;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #app {
+  position: fixed;
+  inset: 0;
   height: 100%;
   height: 100dvh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: calc(8px + env(safe-area-inset-top, 0px)) calc(8px + env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) calc(8px + env(safe-area-inset-left, 0px));
   box-sizing: border-box;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #frame {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 24px;
-  width: var(--frame-w);
-  max-width: 100%;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   box-sizing: border-box;
 }
 
+/* Fullscreen canvas in every orientation; the renderer letterbox-centres
+   the world inside the holder, so the game fills the screen with no DOM
+   chrome and no orientation lock. */
 #canvas-holder {
-  width: 100%;
-  aspect-ratio: 480 / 272;
-  flex: 0 0 auto;
-  min-height: 0;
+  position: absolute;
+  top: env(safe-area-inset-top, 0px);
+  right: env(safe-area-inset-right, 0px);
+  bottom: env(safe-area-inset-bottom, 0px);
+  left: env(safe-area-inset-left, 0px);
   background: #0d0e1a;
-  border-radius: 12px;
   overflow: hidden;
-  box-shadow: 0 12px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.08);
   touch-action: none;
-  position: relative;
 }
 
 #canvas-holder canvas {
   width: 100% !important;
   height: 100% !important;
   display: block;
+  touch-action: none;
 }
 
-#touch-controls {
-  display: flex;
-  width: 100%;
-  gap: 16px;
+#gesture-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
-  margin-top: 12px;
 }
 
-.tc-dpad, .tc-middle, .tc-right {
+#pause-badge {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top, 0px));
+  right: calc(10px + env(safe-area-inset-right, 0px));
+  z-index: 4;
+  width: 48px;
+  height: 48px;
   display: flex;
-  gap: 16px;
   align-items: center;
-}
-
-/* Pause in the middle: side groups flex equally so the centre
-   group (pause) is truly centred. */
-.tc-dpad {
-  flex: 1 1 0;
-  justify-content: flex-start;
-  /* Menu D-pad cross: Up top, Left/Right middle, Down bottom.
-     Empty centre + hidden Up/Down collapse the grid, so in game
-     the D-pad is just the Left/Right row. */
-  display: grid;
-  grid-template-areas:
-    ". up ."
-    "left mid right"
-    ". down .";
-  grid-template-columns: auto auto auto;
-  grid-template-rows: auto auto auto;
-  justify-items: center;
-  align-items: center;
-  gap: 4px;
-}
-.dpad-up { grid-area: up; }
-#btn-left { grid-area: left; }
-#btn-right { grid-area: right; }
-.dpad-down { grid-area: down; }
-.tc-middle {
-  flex: 0 0 auto;
   justify-content: center;
-}
-.tc-right {
-  flex: 1 1 0;
-  justify-content: flex-end;
-}
-
-/* Up/Down: menu navigation only — hidden while playing */
-#touch-controls .btn-updown {
-  display: none;
-}
-#touch-controls.is-menu .btn-updown {
-  display: flex;
-}
-
-/* ENTER label needs smaller text than the ⬆ arrow glyph */
-#touch-controls.is-menu #btn-jump {
-  font-size: clamp(12px, 3.5vw, 16px);
-  letter-spacing: 0.5px;
-  font-weight: 700;
-}
-
-/* In menus there are 6 buttons (left/right + up/pause/down + enter),
-   so shrink them a little to fit a portrait phone width. */
-#touch-controls.is-menu button {
-  width: clamp(52px, 13vw, 72px);
-  height: clamp(52px, 13vw, 72px);
-  font-size: clamp(20px, 5vw, 26px);
-}
-#touch-controls.is-menu #btn-jump {
-  font-size: clamp(11px, 3.2vw, 15px);
-}
-#touch-controls.is-menu .tc-middle,
-#touch-controls.is-menu .tc-right {
-  gap: 8px;
-}
-#touch-controls.is-menu .tc-dpad {
-  gap: 4px;
-}
-
-#touch-controls button {
-  width: 84px;
-  height: 76px;
-  font-size: 30px;
-  border-radius: 16px;
-  border: 1px solid #444;
-  background: #2a2a4a;
-  color: #fff;
-  cursor: pointer;
+  font-size: 16px;
+  letter-spacing: 1px;
+  color: rgba(255,255,255,0.85);
+  background: rgba(16,16,32,0.32);
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.28);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   touch-action: none;
+  pointer-events: auto;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s;
+}
+
+#pause-badge.visible {
+  opacity: 0.85;
+  visibility: visible;
+}
+
+/* Classic D-Pad overlay (only when that control mode is selected). */
+#dpad-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 4;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 calc(16px + env(safe-area-inset-left, 0px));
+  box-sizing: border-box;
+  pointer-events: none;
+  touch-action: none;
+}
+#dpad-controls[hidden] { display: none !important; }
+.dp-left, .dp-right { display: flex; gap: 12px; align-items: flex-end; }
+#dpad-controls button {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.5);
+  background: rgba(20,22,44,0.55);
+  color: #fff;
+  font-size: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
 }
+#dpad-controls button:active { background: #ff3521; }
+#dpad-controls .dp-menu { display: none; width: 56px; height: 56px; font-size: 20px; }
+#dpad-controls.is-menu .dp-menu { display: flex; }
+#dpad-controls.is-menu #dp-jump { width: 56px; height: 56px; font-size: 10px; font-weight: 700; }
+body[data-control="dpad"] #gesture-layer { pointer-events: none; }
 
-#touch-controls button:active {
-  background: #ff3521;
+/* First-run tutorial overlay */
+#tutorial {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px 16px calc(26px + env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
+  pointer-events: none;
 }
+#tutorial[hidden] { display: none !important; }
+.tut-box {
+  width: min(92vw, 420px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px 14px;
+  background: rgba(13,17,36,0.92);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.55);
+  text-align: center;
+  pointer-events: auto;
+}
+#tut-art { font-size: 44px; line-height: 1; animation: tut-pulse 0.9s ease-in-out infinite alternate; }
+@keyframes tut-pulse { from { transform: scale(1); opacity: .7; } to { transform: scale(1.18); opacity: 1; } }
+#tut-text { font-size: 17px; font-weight: 600; color: #fff; min-height: 24px; }
+#tut-dots { display: flex; gap: 8px; }
+#tut-dots i { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.25); font-style: normal; }
+#tut-dots i.on { background: #00e5ff; }
+#tut-skip { font-size: 13px; color: #90a4ae; background: transparent; border: none; padding: 6px 12px; cursor: pointer; }
 
+/* Desktop keyboard hint */
 #hint {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 2;
   font-size: 12px;
-  opacity: .7;
-  text-align: center;
-  max-width: 100%;
-}
-
-#rotate-hint {
+  opacity: 0.75;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.9);
   display: none;
-  font-size: 12px;
-  opacity: .6;
-  text-align: center;
 }
-
-/* Desktop mouse / keyboard: hide touch controls, show hints */
 @media (hover: hover) and (pointer: fine) {
-  #touch-controls {
-    display: none;
-  }
-  #rotate-hint {
-    display: none;
-  }
-  :root {
-    /* No controls row, only hint */
-    --frame-w: min(96vw, 1100px, calc((100dvh - 40px) * var(--game-aspect)));
-  }
-}
-
-/* Touch devices without a precise pointer: show controls */
-@media (pointer: coarse) {
-  #touch-controls {
-    display: flex;
-  }
-}
-
-/* ========================================================
-   PORTRAIT (vertical) - phone & tablet
-   Game on top, controls below, full width, no cropping
-   ======================================================== */
-@media (orientation: portrait) {
-  :root {
-    /* Reserve room for bigger controls (~84px) + 24px gap + rotate hint + safe area */
-    --frame-w: min(
-      calc(100vw - 16px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)),
-      calc((100dvh - 210px - env(safe-area-inset-bottom, 0px)) * var(--game-aspect)),
-      1100px
-    );
-  }
-
-  #frame {
-    justify-content: center;
-    min-height: 0;
-    gap: 24px;
-  }
-
-  #touch-controls {
-    width: 100%;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
-    padding-top: 12px;
-    margin-top: 12px;
-  }
-
-  .tc-dpad, .tc-right {
-    gap: 16px;
-  }
-
-  #touch-controls button {
-    width: clamp(72px, 20vw, 96px);
-    height: clamp(64px, 18vw, 84px);
-    font-size: clamp(26px, 6vw, 32px);
-    border-radius: 16px;
-  }
-
-  #hint {
-    display: none;
-  }
-
-  #rotate-hint {
-    display: block;
-  }
-}
-
-/* Portrait on desktop (narrow window, mouse) - keep controls hidden */
-@media (orientation: portrait) and (hover: hover) and (pointer: fine) {
-  :root {
-    --frame-w: min(96vw, calc((100dvh - 40px) * var(--game-aspect)), 1100px);
-  }
-  #touch-controls {
-    display: none;
-  }
-  #rotate-hint {
-    display: none;
-  }
-  #hint {
-    display: block;
-  }
-}
-
-/* ========================================================
-   MOBILE PORTRAIT — top 40% game / middle 20% distance /
-   bottom 40% buttons (buttons centred inside bottom 40%)
-   ======================================================== */
-@media (orientation: portrait) and (pointer: coarse) {
-  #app {
-    align-items: stretch;
-    justify-content: stretch;
-  }
-
-  #frame {
-    width: 100%;
-    height: 100%;
-    display: grid;
-    grid-template-rows: 40% 20% 40%;
-    grid-template-columns: 100%;
-    justify-items: center;
-    align-items: center;
-    gap: 0;
-  }
-
-  /* Gameplay screen: centred inside the top 40% row.
-     Width is capped by that row's height (36dvh leaves a little
-     breathing room) so the 480/272 canvas never spills into the gap. */
-  #canvas-holder {
-    grid-row: 1;
-    grid-column: 1;
-    width: min(100%, calc(36dvh * var(--game-aspect)));
-  }
-
-  /* Middle 20% is the empty distance between game and buttons */
-  #hint,
-  #rotate-hint {
-    display: none;
-  }
-
-  /* Buttons: stretched to fill the bottom 40% row, centred inside it */
-  #touch-controls {
-    grid-row: 3;
-    grid-column: 1;
-    width: 100%;
-    height: 100%;
-    align-self: stretch;
-    align-items: center;
-    justify-content: space-between;
-    margin: 0;
-    padding: 0;
-  }
-
-  .tc-dpad, .tc-right {
-    gap: 16px;
-  }
-
-  #touch-controls button {
-    width: clamp(76px, 22vw, 104px);
-    height: clamp(68px, 20vw, 92px);
-    font-size: clamp(28px, 7vw, 36px);
-  }
-}
-
-/* ========================================================
-   LANDSCAPE (horizontal) - phone & tablet & desktop
-   Game on top, controls below with a clear gap (not overlay),
-   so buttons never cover gameplay / HUD.
-   ======================================================== */
-@media (orientation: landscape) {
-  :root {
-    --frame-w: min(
-      calc(100vw - 16px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)),
-      calc((100dvh - 150px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) * var(--game-aspect)),
-      1200px
-    );
-  }
-
-  #frame {
-    justify-content: center;
-    gap: 24px;
-  }
-
-  #hint {
-    display: none;
-  }
-
-  #rotate-hint {
-    display: none;
-  }
-}
-
-/* Landscape touch: big buttons below the canvas with a gap */
-@media (orientation: landscape) and (pointer: coarse) {
-  #frame {
-    justify-content: center;
-    gap: 24px;
-  }
-
-  #touch-controls {
-    position: static;
-    width: 100%;
-    margin-top: 12px;
-    padding-top: 12px;
-    pointer-events: auto;
-    justify-content: space-between;
-  }
-
-  #touch-controls button {
-    pointer-events: auto;
-    width: clamp(72px, 14vh, 88px);
-    height: clamp(64px, 14vh, 80px);
-    font-size: clamp(26px, 5vh, 30px);
-    border-radius: 16px;
-    background: #2a2a4a;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  #touch-controls button:active {
-    background: #ff3521;
-  }
-}
-
-/* Landscape desktop (mouse): no controls - canvas can use full height */
-@media (orientation: landscape) and (hover: hover) and (pointer: fine) {
-  :root {
-    --frame-w: min(
-      calc(100vw - 16px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)),
-      calc((100dvh - 16px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) * var(--game-aspect)),
-      1200px
-    );
-  }
-  #frame {
-    gap: 8px;
-  }
-  #touch-controls {
-    display: none;
-  }
-}
-
-/* Very short viewports in portrait (split-screen, foldables):
-   slightly smaller (but still large) controls so game never overflows */
-@media (orientation: portrait) and (max-height: 500px) {
-  :root {
-    --frame-w: min(
-      calc(100vw - 16px),
-      calc((100dvh - 160px) * var(--game-aspect)),
-      1100px
-    );
-  }
-  #frame {
-    gap: 16px;
-  }
-  #touch-controls button {
-    width: 72px;
-    height: 60px;
-    font-size: 24px;
-  }
-  #rotate-hint {
-    display: none;
-  }
-}
-
-/* Small phones: keep buttons large, only tighten the inner gap */
-@media (max-width: 360px) {
-  .tc-right {
-    gap: 10px;
-  }
-  #touch-controls button {
-    width: 68px;
-    height: 60px;
-    font-size: 24px;
-  }
-}
-
-/* D-pad cross stays tight in every layout */
-.tc-dpad {
-  gap: 4px;
-}
-
-/* Landscape menu: D-pad is 3 buttons tall, shrink it to fit */
-@media (orientation: landscape) and (pointer: coarse) {
-  #touch-controls.is-menu button {
-    width: 56px;
-    height: 48px;
-  }
+  #hint { display: block; }
 }

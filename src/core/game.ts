@@ -1,17 +1,21 @@
-import { SCREEN_WIDTH, SCREEN_HEIGHT, HUD_HEIGHT, TILE_SIZE, Player, BallState, SizeState, MAX_LEVEL, RING_POINTS, GEM_POINTS, LIFE_POINTS, EXIT_POINTS, getMobileZoom } from './constants';
+import { SCREEN_HEIGHT, HUD_HEIGHT, TILE_SIZE, Player, BallState, SizeState, MAX_LEVEL, RING_POINTS, GEM_POINTS, LIFE_POINTS, EXIT_POINTS, getViewSize } from './constants';
 import { LevelData, loadLevel, setTileId, updateMovingObjects } from './level';
 import { playerInit, playerUpdate, setDir, releaseDir, PhysicsHooks } from './physics';
 import { MoveDir } from './constants';
 import { Input, BTN } from './input';
 import { audio } from './audio';
 
-export type GameState = 'splash' | 'menu' | 'levelselect' | 'game' | 'highscore' | 'instructions' | 'complete' | 'gameover';
+export type ControlMode = 'gesture' | 'dpad';
+export type GameState = 'splash' | 'menu' | 'levelselect' | 'game' | 'highscore' | 'instructions' | 'complete' | 'gameover' | 'settings' | 'controlchoose';
 
 export class Game {
   state: GameState = 'splash';
   splashT = 0;
-  menuSel = 1; // 0 continue,1 new,2 levels,3 scores,4 help
+  menuSel = 1; // 0 continue,1 new,2 levels,3 scores,4 help,5 settings
   selectedLevel = 1;
+  controlMode: ControlMode = 'gesture';
+  settingsSel = 0;
+  chooseSel = 0;
   level: LevelData | null = null;
   player: Player = {} as Player;
   numRings = 0; score = 0; numLives = 3;
@@ -53,7 +57,17 @@ export class Game {
     try {
       this.bestLevel = Number(localStorage.getItem('bounce_best_level') ?? 1) || 1;
       this.bestScore = Number(localStorage.getItem('bounce_best_score') ?? 0) || 0;
+      const cm = localStorage.getItem('bounce_control');
+      if (cm === 'dpad' || cm === 'gesture') this.controlMode = cm;
     } catch { /* ignore */ }
+    this.settingsSel = this.controlMode === 'dpad' ? 1 : 0;
+    this.chooseSel = this.controlMode === 'dpad' ? 1 : 0;
+  }
+  setControl(mode: ControlMode) {
+    this.controlMode = mode;
+    this.settingsSel = mode === 'dpad' ? 1 : 0;
+    this.chooseSel = mode === 'dpad' ? 1 : 0;
+    try { localStorage.setItem('bounce_control', mode); } catch { /* ignore */ }
   }
   saveRecords() {
     let changed = false;
@@ -127,16 +141,13 @@ export class Game {
   }
   isLevelSmall() {
     if (!this.level) return true;
-    const zoom = getMobileZoom();
-    const gameH = (SCREEN_HEIGHT - HUD_HEIGHT) / zoom;
+    const gameH = getViewSize().viewH * (SCREEN_HEIGHT - HUD_HEIGHT) / SCREEN_HEIGHT;
     return this.level.height * TILE_SIZE < gameH;
   }
   calcCamera() {
     if (!this.level) return;
-    const zoom = getMobileZoom();
-    const viewW = SCREEN_WIDTH / zoom;
-    const viewH = SCREEN_HEIGHT / zoom;
-    const gameH = viewH - HUD_HEIGHT / zoom;
+    const { viewW, viewH } = getViewSize();
+    const gameH = viewH * (SCREEN_HEIGHT - HUD_HEIGHT) / SCREEN_HEIGHT;
     let cx = this.player.xPos - viewW / 2;
     if (!this.camInit) { this.camY = this.player.yPos - gameH / 2; this.camInit = true; }
     if (!this.isLevelSmall()) {
@@ -155,9 +166,8 @@ export class Game {
   }
   exitVisible(): boolean {
     if (!this.level) return false;
-    const zoom = getMobileZoom();
-    const viewW = SCREEN_WIDTH / zoom;
-    const gameH = (SCREEN_HEIGHT - HUD_HEIGHT) / zoom;
+    const { viewW, viewH } = getViewSize();
+    const gameH = viewH * (SCREEN_HEIGHT - HUD_HEIGHT) / SCREEN_HEIGHT;
     const ex = this.level.exitPosX * TILE_SIZE, ey = this.level.exitPosY * TILE_SIZE;
     return ex < this.camX + viewW && ex + 24 > this.camX && ey < this.camY + gameH && ey + 24 > this.camY;
   }
@@ -233,20 +243,26 @@ export class Game {
   menuNav(up: boolean, down: boolean, select: boolean) {
     if (this.menuSel === 0 && !this.savedInProgress) this.menuSel = 1;
     if (up && this.menuSel > 0) { this.menuSel--; if (this.menuSel === 0 && !this.savedInProgress) this.menuSel = 1; }
-    if (down && this.menuSel < 4) this.menuSel++;
+    if (down && this.menuSel < 5) this.menuSel++;
     if (select) {
       audio.unlock();
       if (this.menuSel === 0 && this.savedInProgress) this.state = 'game';
-      else if (this.menuSel === 1) void this.startLevel(1, true);
+      else if (this.menuSel === 1) { this.chooseSel = this.controlMode === 'dpad' ? 1 : 0; this.state = 'controlchoose'; }
       else if (this.menuSel === 2) this.state = 'levelselect';
       else if (this.menuSel === 3) this.state = 'highscore';
       else if (this.menuSel === 4) { this.instructionPage = 0; this.state = 'instructions'; }
+      else if (this.menuSel === 5) { this.settingsSel = this.controlMode === 'dpad' ? 1 : 0; this.state = 'settings'; }
     }
+  }
+  chooseControl(idx: number) {
+    if (idx === 2) { this.state = 'menu'; return; }
+    this.setControl(idx === 1 ? 'dpad' : 'gesture');
+    void this.startLevel(1, true);
   }
 }
 export const INSTRUCTIONS = [
-  'Bounce the ball with 4/6 or arrows. Press 2 / Space / Up to bounce higher. Collect all rings to open the exit door.',
-  'Blue blocks are bouncy. Red bricks are solid. Avoid spikes! L+R (Q+E) toggles invincibility cheat.',
+  'Drag left/right to move. Tap anywhere to bounce higher. Collect all rings to open the exit door. (Keyboard: arrows / A D, Space bounce.)',
+  'Blue blocks are bouncy. Red bricks are solid. Avoid spikes! Touch: two-finger tap pauses.',
   'Rings: jump through hoops to collect 500 pts. Gems (200 pts) set your checkpoint. Extra life ball gives 1000 pts.',
   'Size matters: big ball bounces lower but survives? Small rings block the big ball. Use red arrows to shrink/grow.',
   'Bonuses: lightning = speed, gravity arrows flip gravity, jump arrows boost jump. All last 300 ticks.',

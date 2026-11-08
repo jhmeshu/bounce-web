@@ -6,6 +6,7 @@ export class Input {
   private released = new Set<number>();
   private keyMap = new Map<string, number>();
   cheatArmedR = false;
+  lastSource: 'keyboard' | 'touch' | null = null;
   constructor() {
     this.keyMap.set('arrowleft', BTN.Left); this.keyMap.set('a', BTN.Left);
     this.keyMap.set('arrowright', BTN.Right); this.keyMap.set('d', BTN.Right);
@@ -19,6 +20,7 @@ export class Input {
     this.keyMap.set('p', BTN.Start);
     this.keyMap.set('q', BTN.L); this.keyMap.set('e', BTN.R);
     window.addEventListener('keydown', (e) => {
+      this.lastSource = 'keyboard';
       const k = e.key.toLowerCase();
       let b = this.keyMap.get(k);
       if (b === undefined) {
@@ -49,22 +51,53 @@ export class Input {
       this.heldMask &= ~b;
       this.released.add(b);
     });
-    this.bindTouch('btn-left', BTN.Left);
-    this.bindTouch('btn-right', BTN.Right);
-    this.bindTouch('btn-up', BTN.Up);
-    this.bindTouch('btn-down', BTN.Down);
-    this.bindTouch('btn-jump', BTN.Cross);
-    this.bindTouch('btn-pause', BTN.Start);
+    this.bindTouch('dp-left', BTN.Left);
+    this.bindTouch('dp-right', BTN.Right);
+    this.bindTouch('dp-up', BTN.Up);
+    this.bindTouch('dp-down', BTN.Down);
+    this.bindTouch('dp-jump', BTN.Cross);
+  }
+  press(btn: number) {
+    this.lastSource = 'touch';
+    if (!(this.heldMask & btn)) this.pressed.add(btn);
+    this.heldMask |= btn;
+  }
+  tap(btn: number) {
+    this.press(btn);
+    this.release(btn);
+  }
+  release(btn: number) {
+    if (this.heldMask & btn) {
+      this.heldMask &= ~btn;
+      this.released.add(btn);
+    }
   }
   private bindTouch(id: string, btn: number) {
     const el = document.getElementById(id);
     if (!el) return;
-    const down = (e: Event) => { e.preventDefault(); if (!(this.heldMask & btn)) this.pressed.add(btn); this.heldMask |= btn; };
-    const up = (e: Event) => { e.preventDefault(); this.heldMask &= ~btn; this.released.add(btn); };
-    el.addEventListener('pointerdown', down);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
-    el.addEventListener('pointerleave', up);
+    const down = (e: PointerEvent) => {
+      e.preventDefault();
+      try {
+        if ('setPointerCapture' in el && e.pointerId !== undefined) {
+          el.setPointerCapture(e.pointerId);
+        }
+      } catch {}
+      if (!(this.heldMask & btn)) this.pressed.add(btn);
+      this.heldMask |= btn;
+    };
+    const up = (e: PointerEvent) => {
+      e.preventDefault();
+      try {
+        if ('releasePointerCapture' in el && el.hasPointerCapture?.(e.pointerId)) {
+          el.releasePointerCapture(e.pointerId);
+        }
+      } catch {}
+      this.heldMask &= ~btn;
+      this.released.add(btn);
+    };
+    el.addEventListener('pointerdown', down as EventListener);
+    el.addEventListener('pointerup', up as EventListener);
+    el.addEventListener('pointercancel', up as EventListener);
   }
   held(b: number) { return (this.heldMask & b) !== 0; }
   consumePressed(b: number) { if (this.pressed.has(b)) { this.pressed.delete(b); return true; } return false; }

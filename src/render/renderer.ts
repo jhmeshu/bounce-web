@@ -1,8 +1,8 @@
 import * as PIXI from 'pixi.js';
 import { CullerPlugin, extensions } from 'pixi.js';
 import {
-  SCREEN_WIDTH, SCREEN_HEIGHT, HUD_HEIGHT, TILE_SIZE, COL,
-  BallState, SizeState, MAX_LEVEL, getMobileZoom
+  SCREEN_HEIGHT, HUD_HEIGHT, TILE_SIZE, COL,
+  BallState, SizeState, MAX_LEVEL, getViewSize
 } from '../core/constants';
 import { TILE_DB, TF } from '../core/tiles';
 import { LevelData, tileRawAt } from '../core/level';
@@ -14,14 +14,13 @@ import { HDTileLibrary } from './hd-tiles';
 // Enable automatic viewport culling for marked nodes
 extensions.add(CullerPlugin);
 
-const HD_SCALE = 2;
-const RENDER_WIDTH = SCREEN_WIDTH * HD_SCALE;   // 960
-const RENDER_HEIGHT = SCREEN_HEIGHT * HD_SCALE; // 544
+const BASE_RENDER_W = 960;
+const BASE_RENDER_H = 544;
 
 function abgr(hex: number) { return hex & 0xffffff; }
 
 function isCompactLayout() {
-  return getMobileZoom() > 1;
+  return getViewSize().viewW < 480;
 }
 
 export class Renderer {
@@ -116,6 +115,15 @@ export class Renderer {
   lastUiKey = '';
   splashBallGfx: PIXI.Graphics | null = null;
 
+  rw = 960;
+  rh = 544;
+  effScale = 2;
+  viewW = 480;
+  viewH = 272;
+  offsetX = 0;
+  offsetY = 0;
+  private holderEl: HTMLElement | null = null;
+
   // Camera & Animation State
   smoothCamX = 0;
   smoothCamY = 0;
@@ -141,17 +149,39 @@ export class Renderer {
     this.game.onEffect = (name, x, y) => this.handleEffect(name, x, y);
   }
 
+  resizeToHolder() {
+    if (!this.app || !this.holderEl) return;
+    const cssW = Math.max(1, this.holderEl.clientWidth);
+    const cssH = Math.max(1, this.holderEl.clientHeight);
+    const vs = getViewSize();
+    this.app.renderer.resize(cssW, cssH);
+    this.rw = this.app.renderer.width;
+    this.rh = this.app.renderer.height;
+    this.viewW = vs.viewW;
+    this.viewH = vs.viewH;
+    this.effScale = Math.min(this.rw / vs.viewW, this.rh / vs.viewH);
+    this.offsetX = (this.rw - vs.viewW * this.effScale) / 2;
+    this.offsetY = (this.rh - vs.viewH * this.effScale) / 2;
+    this.lastHudKey = '';
+    this.lastUiKey = '';
+    this.lastToastMsg = '';
+    this.toastText.visible = false;
+    this.toastBanner.visible = false;
+  }
+
   async init(holder: HTMLElement) {
-    const isMobile = isCompactLayout() || (typeof window !== 'undefined' && window.innerWidth <= 768);
+    this.holderEl = holder;
+    const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+    const effectiveResolution = Math.min(Math.max(dpr, 2), 3);
 
     this.app = new PIXI.Application();
     await this.app.init({
-      width: RENDER_WIDTH,
-      height: RENDER_HEIGHT,
+      width: BASE_RENDER_W,
+      height: BASE_RENDER_H,
       background: 0x16152b,
-      antialias: !isMobile, // Skip expensive 4x MSAA on mobile for max frame rate
+      antialias: true,
       autoDensity: true,
-      resolution: isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2),
+      resolution: effectiveResolution,
       powerPreference: 'high-performance',
       preference: 'webgl',
     });
@@ -161,6 +191,14 @@ export class Renderer {
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     holder.appendChild(canvas);
+    this.resizeToHolder();
+    if ('ResizeObserver' in window) {
+      new ResizeObserver(() => this.resizeToHolder()).observe(holder);
+    }
+    window.addEventListener('resize', () => this.resizeToHolder());
+    window.addEventListener('orientationchange', () => setTimeout(() => this.resizeToHolder(), 60));
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', () => this.resizeToHolder());
+    document.addEventListener('fullscreenchange', () => setTimeout(() => this.resizeToHolder(), 60));
 
     // Initialize PixiJS Assets system
     await PIXI.Assets.init({ basePath: './assets/' });
@@ -172,7 +210,7 @@ export class Renderer {
 
     // Set up layer hierarchy — water sits behind bricks so its
     // extended edges seal under them instead of tinting them.
-    this.gameLayer.scale.set(HD_SCALE, HD_SCALE);
+    this.gameLayer.scale.set(this.effScale, this.effScale);
     this.gameLayer.addChild(
       this.bgLayer,
       this.waterLayer,
@@ -312,18 +350,13 @@ export class Renderer {
         this.screenShake *= 0.86;
       }
 
-      // Zoom: mobile ≈2x (visible 240×136 game units), desktop 1x (480×272).
-      // gameLayer is scaled by HD_SCALE × zoom so the world fills the
-      // 960×544 canvas. HUD/UI are also enlarged ~2x on mobile (see
-      // panel/drawUi/drawToast) so menus match the in-game zoom.
-      const effScale = HD_SCALE * getMobileZoom();
+      const vs = getViewSize();
+      if (vs.viewW !== this.viewW || vs.viewH !== this.viewH) this.resizeToHolder();
+      const effScale = this.effScale;
       this.gameLayer.scale.set(effScale, effScale);
-      // Snap to whole render pixels so tile edges stay pixel-aligned
-      // (fractional camera positions otherwise antialias a hairline gap
-      // between every tile / between water and brick).
       this.gameLayer.position.set(
-        Math.round((-this.smoothCamX + shakeX) * effScale),
-        Math.round((-this.smoothCamY + shakeY) * effScale)
+        Math.round(this.offsetX + (-this.smoothCamX + shakeX) * effScale),
+        Math.round(this.offsetY + (-this.smoothCamY + shakeY) * effScale)
       );
 
       this.bakeStatic(lvl);
@@ -449,9 +482,8 @@ export class Renderer {
     const g = this.hazardLayer;
     g.clear();
 
-    const effScale = HD_SCALE * getMobileZoom();
-    const viewW = RENDER_WIDTH / effScale;
-    const viewH = RENDER_HEIGHT / effScale;
+    const viewW = this.viewW;
+    const viewH = this.viewH;
 
     for (const o of lvl.movingObjects) {
       const sx = o.topLeft[0] * 12 + o.offset[0];
@@ -497,9 +529,8 @@ export class Renderer {
     const g = this.waterLayer;
     g.clear();
 
-    const effScale = HD_SCALE * getMobileZoom();
-    const viewW = RENDER_WIDTH / effScale;
-    const viewH = RENDER_HEIGHT / effScale;
+    const viewW = this.viewW;
+    const viewH = this.viewH;
 
     // Viewport-based culling with 2-tile margin
     const minTX = Math.max(0, Math.floor((this.smoothCamX - 24) / TILE_SIZE));
@@ -646,9 +677,10 @@ export class Renderer {
     this.hudRoot.visible = true;
     const isMobile = isCompactLayout();
     const layoutKey = isMobile ? 'compact' : 'wide';
-    const HUD_H = HUD_HEIGHT * HD_SCALE; // 34px
-    const y0 = RENDER_HEIGHT - HUD_H;
-    const W = RENDER_WIDTH;
+    void HUD_HEIGHT;
+    const HUD_H = Math.max(34, Math.round(this.rh * 0.0625));
+    const y0 = this.rh - HUD_H;
+    const W = this.rw;
     const cx = W / 2;
 
     if (this.lastHudKey !== layoutKey) {
@@ -783,21 +815,24 @@ export class Renderer {
   drawToast(msg: string) {
     this.toastActive = true;
     const isMobile = isCompactLayout();
-    const bw = isMobile ? 460 : 380, bh = isMobile ? 48 : 32;
-    const bx = RENDER_WIDTH / 2 - bw / 2;
-    const by = 20;
+    const S = this.us();
+    let bw = (isMobile ? 460 : 380) * S, bh = (isMobile ? 48 : 32) * S;
+    bw = Math.min(bw, this.rw * 0.92);
+    bh = Math.min(bh, this.rh * 0.12);
+    const bx = this.rw / 2 - bw / 2;
+    const by = 16 * S;
 
     if (this.lastToastMsg !== msg || !this.toastBanner.visible) {
       this.lastToastMsg = msg;
       this.toastBanner.clear();
-      this.toastBanner.roundRect(bx, by, bw, bh, 16)
+      this.toastBanner.roundRect(bx, by, bw, bh, 16 * S)
         .fill({ color: 0x0d1b2a, alpha: 0.88 })
-        .stroke({ width: 1.5, color: 0x00e5ff });
+        .stroke({ width: 1.5 * S, color: 0x00e5ff });
 
       this.toastText.text = msg;
-      this.toastText.style.fontSize = isMobile ? 20 : 13;
-      this.toastText.x = RENDER_WIDTH / 2 - this.toastText.width / 2;
-      this.toastText.y = isMobile ? by + 10 : by + 7;
+      this.toastText.style.fontSize = Math.max(11, (isMobile ? 20 : 13) * S);
+      this.toastText.x = this.rw / 2 - this.toastText.width / 2;
+      this.toastText.y = by + (isMobile ? 10 : 7) * S;
 
       this.toastBanner.visible = true;
       this.toastText.visible = true;
@@ -812,73 +847,103 @@ export class Renderer {
     }
   }
 
-  panel(title: string, lines: string[], footer: string): void {
+  /** UI scale: ~0.5× on portrait phones (no overflow), up to ~2× on big desktops. */
+  us(): number {
+    if (this.rh >= this.rw) return Math.min(0.75, Math.max(0.45, this.rw / 640));
+    return Math.min(2.2, Math.max(0.65, Math.min(this.rw / 960, this.rh / 544)));
+  }
+
+  /** Option list card for Settings / Choose-Control. */
+  optionList(title: string, labels: string[], descs: string[], sel: number, footer: string) {
     const isMobile = isCompactLayout();
+    const S = this.us();
     const ui = this.uiRoot;
-    ui.removeChildren();
-
-    // Backdrop
     const bg = new PIXI.Graphics();
-    bg.rect(0, 0, RENDER_WIDTH, RENDER_HEIGHT).fill(0x0f1123);
+    bg.rect(0, 0, this.rw, this.rh).fill(0x0d1124);
     ui.addChild(bg);
-
-    // Modern Frosted Card — mobile ~2x (was 260×320 / 20 / 12 / 11)
-    const pw = isMobile ? 480 : 560, ph = isMobile ? 380 : 320;
-    const px = (RENDER_WIDTH - pw) / 2, py = (RENDER_HEIGHT - ph) / 2;
-    const card = new PIXI.Graphics();
-    card.roundRect(px, py, pw, ph, 16)
-      .fill({ color: 0x1a1e36, alpha: 0.95 })
-      .stroke({ width: 2, color: 0x3f51b5 });
-    ui.addChild(card);
-
-    // Title
     const t = new PIXI.Text({
       text: title,
-      style: {
-        fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-        fontSize: isMobile ? 36 : 28,
-        fontWeight: 'bold',
-        fill: 0xffffff,
-      }
+      style: { fontFamily: "'Segoe UI', system-ui, sans-serif", fontSize: (isMobile ? 40 : 34) * S, fontWeight: 'bold', fill: 0xff5252, letterSpacing: 2 * S },
     });
-    t.x = RENDER_WIDTH / 2 - t.width / 2;
-    t.y = py + (isMobile ? 28 : 22);
+    t.x = this.rw / 2 - t.width / 2;
+    t.y = this.rh * 0.1;
     ui.addChild(t);
+    const btnW = (isMobile ? 400 : 360) * S, btnH = (isMobile ? 62 : 48) * S;
+    const gap = 14 * S;
+    const totalH = labels.length * btnH + (labels.length - 1) * gap;
+    const startY = (this.rh - totalH) / 2 - 20 * S;
+    labels.forEach((label, i) => {
+      const selected = sel === i;
+      const btnY = startY + i * (btnH + gap);
+      const btnX = this.rw / 2 - btnW / 2;
+      const g = new PIXI.Graphics();
+      if (selected) g.roundRect(btnX, btnY, btnW, btnH, 10 * S).fill(0xd32f2f).stroke({ width: 2 * S, color: 0xffcdd2 });
+      else g.roundRect(btnX, btnY, btnW, btnH, 10 * S).fill(0x1a2138).stroke({ width: 1 * S, color: 0x2e3856 });
+      ui.addChild(g);
+      const lt = new PIXI.Text({
+        text: label,
+        style: { fontFamily: "'Segoe UI', system-ui, sans-serif", fontSize: (isMobile ? 22 : 18) * S, fontWeight: selected ? 'bold' : 'normal', fill: selected ? 0xffffff : 0xcfd8dc },
+      });
+      lt.x = this.rw / 2 - lt.width / 2;
+      lt.y = btnY + 8 * S;
+      ui.addChild(lt);
+      const dt = new PIXI.Text({
+        text: descs[i],
+        style: { fontFamily: "'Segoe UI', system-ui, sans-serif", fontSize: (isMobile ? 14 : 12) * S, fill: 0x90a4ae },
+      });
+      dt.x = this.rw / 2 - dt.width / 2;
+      dt.y = btnY + (isMobile ? 34 : 27) * S;
+      ui.addChild(dt);
+    });
+    const f = new PIXI.Text({
+      text: footer,
+      style: { fontFamily: "'Segoe UI', system-ui, sans-serif", fontSize: (isMobile ? 15 : 13) * S, fill: 0x90a4ae },
+    });
+    f.x = this.rw / 2 - f.width / 2;
+    f.y = this.rh - 38 * S;
+    ui.addChild(f);
+  }
 
-    // Decorative underline
+  panel(title: string, lines: string[], footer: string): void {
+    const isMobile = isCompactLayout();
+    const S = this.us();
+    const ui = this.uiRoot;
+    ui.removeChildren();
+    const bg = new PIXI.Graphics();
+    bg.rect(0, 0, this.rw, this.rh).fill(0x0f1123);
+    ui.addChild(bg);
+    let pw = (isMobile ? 480 : 560) * S, ph = (isMobile ? 380 : 320) * S;
+    pw = Math.min(pw, this.rw * 0.92);
+    ph = Math.min(ph, this.rh * 0.8);
+    const px = (this.rw - pw) / 2, py = (this.rh - ph) / 2;
+    const card = new PIXI.Graphics();
+    card.roundRect(px, py, pw, ph, 16 * S).fill({ color: 0x1a1e36, alpha: 0.95 }).stroke({ width: 2 * S, color: 0x3f51b5 });
+    ui.addChild(card);
+    const t = new PIXI.Text({
+      text: title,
+      style: { fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", fontSize: (isMobile ? 36 : 28) * S, fontWeight: 'bold', fill: 0xffffff }
+    });
+    t.x = this.rw / 2 - t.width / 2;
+    t.y = py + (isMobile ? 28 : 22) * S;
+    ui.addChild(t);
     const line = new PIXI.Graphics();
-    line.rect(RENDER_WIDTH / 2 - 40, py + (isMobile ? 72 : 62), 80, 2).fill(0x00e5ff);
+    line.rect(this.rw / 2 - 40 * S, py + (isMobile ? 72 : 62) * S, 80 * S, 2 * S).fill(0x00e5ff);
     ui.addChild(line);
-
-    // Body Lines
     lines.forEach((ln, i) => {
       const s = new PIXI.Text({
         text: ln,
-        style: {
-          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: isMobile ? 20 : 16,
-          fill: (i === 0 && title.includes('OVER')) ? 0xff5252 : 0xce93d8,
-          wordWrap: isMobile,
-          wordWrapWidth: isMobile ? 430 : 500,
-          align: 'center',
-        }
+        style: { fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", fontSize: (isMobile ? 20 : 16) * S, fill: (i === 0 && title.includes('OVER')) ? 0xff5252 : 0xce93d8, wordWrap: true, wordWrapWidth: pw - 60 * S, align: 'center' }
       });
-      s.x = RENDER_WIDTH / 2 - s.width / 2;
-      s.y = py + (isMobile ? 92 : 85) + i * (isMobile ? 38 : 32);
+      s.x = this.rw / 2 - s.width / 2;
+      s.y = py + (isMobile ? 92 : 85) * S + i * (isMobile ? 38 : 32) * S;
       ui.addChild(s);
     });
-
-    // Footer Hint
     const f = new PIXI.Text({
       text: footer,
-      style: {
-        fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-        fontSize: isMobile ? 18 : 14,
-        fill: 0x90a4ae
-      }
+      style: { fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", fontSize: (isMobile ? 18 : 14) * S, fill: 0x90a4ae }
     });
-    f.x = RENDER_WIDTH / 2 - f.width / 2;
-    f.y = py + ph - (isMobile ? 48 : 42);
+    f.x = this.rw / 2 - f.width / 2;
+    f.y = py + ph - (isMobile ? 48 : 42) * S;
     ui.addChild(f);
   }
 
@@ -888,61 +953,48 @@ export class Renderer {
     const ui = this.uiRoot;
 
     if (g.state === 'splash') {
-      const ballBounceY = isMobile ? 170 + Math.sin(this.animTime * 3) * 22 : 150 + Math.sin(this.animTime * 3) * 20;
+      const S = this.us();
+      const ballBounceY = this.rh / 2 - (isMobile ? 90 : 80) * S + Math.sin(this.animTime * 3) * 20 * S;
       if (this.lastUiKey === 'splash' && this.splashBallGfx) {
         this.splashBallGfx.y = ballBounceY;
         return;
       }
-      this.lastUiKey = 'splash';
+      this.lastUiKey = `splash:${Math.round(this.rw)}x${Math.round(this.rh)}:${Math.round(S * 100)}`;
       ui.removeChildren();
-
       const bg = new PIXI.Graphics();
-      bg.rect(0, 0, RENDER_WIDTH, RENDER_HEIGHT).fill(0x0c102b);
+      bg.rect(0, 0, this.rw, this.rh).fill(0x0c102b);
       ui.addChild(bg);
-
-      // Animated floating 3D ball
-      const ballR = isMobile ? 52 : 32;
+      const ballR = (isMobile ? 52 : 32) * S;
       const ball = new PIXI.Graphics();
       ball.circle(0, 0, ballR).fill(0x8a0b12);
-      ball.circle(-6, -6, ballR * 0.88).fill(0xd32f2f);
-      ball.circle(-12, -12, ballR * 0.56).fill(0xf44336);
-      ball.circle(-16, -16, ballR * 0.25).fill(0xffffff);
-      ball.circle(0, 0, ballR).stroke({ width: 2, color: 0x4a0508 });
-      ball.x = RENDER_WIDTH / 2;
+      ball.circle(-ballR * 0.12, -ballR * 0.12, ballR * 0.88).fill(0xd32f2f);
+      ball.circle(-ballR * 0.23, -ballR * 0.23, ballR * 0.56).fill(0xf44336);
+      ball.circle(-ballR * 0.31, -ballR * 0.31, ballR * 0.25).fill(0xffffff);
+      ball.circle(0, 0, ballR).stroke({ width: 2 * S, color: 0x4a0508 });
+      ball.x = this.rw / 2;
       ball.y = ballBounceY;
       this.splashBallGfx = ball;
       ui.addChild(ball);
-
       const t = new PIXI.Text({
         text: 'BOUNCE RELOADED',
-        style: {
-          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: isMobile ? 48 : 46,
-          fontWeight: '900',
-          fill: 0xffffff,
-          letterSpacing: isMobile ? 2 : 3,
-        }
+        style: { fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", fontSize: (isMobile ? 48 : 46) * S, fontWeight: '900', fill: 0xffffff, letterSpacing: 2 * S }
       });
-      t.x = RENDER_WIDTH / 2 - t.width / 2;
-      t.y = isMobile ? 268 : 230;
+      t.x = this.rw / 2 - t.width / 2;
+      t.y = ballBounceY + ballR + 12 * S;
       ui.addChild(t);
-
       const sub = new PIXI.Text({
-        text: isMobile ? 'Press Jump or Enter' : 'Press Enter to Play',
-        style: {
-          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: isMobile ? 22 : 16,
-          fill: 0x4fc3f7,
-        }
+        text: isMobile ? 'Tap anywhere to play' : 'Press Enter to Play',
+        style: { fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", fontSize: (isMobile ? 22 : 16) * S, fill: 0x4fc3f7 }
       });
-      sub.x = RENDER_WIDTH / 2 - sub.width / 2;
-      sub.y = isMobile ? 352 : 300;
+      sub.x = this.rw / 2 - sub.width / 2;
+      sub.y = t.y + (isMobile ? 56 : 44) * S;
       ui.addChild(sub);
       return;
     }
 
     this.splashBallGfx = null;
-    const uiKey = `${g.state}:${g.menuSel}:${g.selectedLevel}:${g.instructionPage}:${isMobile ? 'm' : 'd'}`;
+    const S = this.us();
+    const uiKey = `${g.state}:${g.menuSel}:${g.selectedLevel}:${g.instructionPage}:${g.settingsSel}:${g.chooseSel}:${g.controlMode}:${Math.round(S * 100)}`;
     if (this.lastUiKey === uiKey) return;
     this.lastUiKey = uiKey;
 
@@ -950,61 +1002,52 @@ export class Renderer {
 
     if (g.state === 'menu') {
       const bg = new PIXI.Graphics();
-      bg.rect(0, 0, RENDER_WIDTH, RENDER_HEIGHT).fill(0x0d1124);
+      bg.rect(0, 0, this.rw, this.rh).fill(0x0d1124);
       ui.addChild(bg);
-
-      // Header — BOUNCE RELOADED
       const title = new PIXI.Text({
         text: 'BOUNCE RELOADED',
-        style: {
-          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: isMobile ? 48 : 44,
-          fontWeight: 'bold',
-          fill: 0xff5252,
-          letterSpacing: 2,
-        }
+        style: { fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", fontSize: (isMobile ? 48 : 44) * S, fontWeight: 'bold', fill: 0xff5252, letterSpacing: 2 * S }
       });
-      title.x = RENDER_WIDTH / 2 - title.width / 2;
-      title.y = isMobile ? 36 : 50;
+      title.x = this.rw / 2 - title.width / 2;
+      title.y = this.rh * 0.08;
       ui.addChild(title);
-
-      const items = ['Continue', 'New game', 'Select level', 'High score', 'Instructions'];
+      const items = ['Continue', 'New game', 'Select level', 'High score', 'Instructions', 'Settings'];
+      const btnW = (isMobile ? 400 : 340) * S, btnH = (isMobile ? 58 : 42) * S;
+      const gap = (isMobile ? 10 : 12) * S;
+      const totalH = items.length * btnH + (items.length - 1) * gap;
+      const startY = Math.max(this.rh * 0.18, (this.rh - totalH) / 2);
       items.forEach((label, i) => {
         const sel = g.menuSel === i;
         const disabled = i === 0 && !g.savedInProgress;
-        const btnY = isMobile ? 130 + i * 68 : 150 + i * 54;
-        const btnW = isMobile ? 400 : 340, btnH = isMobile ? 58 : 42;
-        const btnX = RENDER_WIDTH / 2 - btnW / 2;
-
+        const btnY = startY + i * (btnH + gap);
+        const btnX = this.rw / 2 - btnW / 2;
         const btnGfx = new PIXI.Graphics();
-        if (sel) {
-          btnGfx.roundRect(btnX, btnY, btnW, btnH, 8)
-            .fill(0xd32f2f)
-            .stroke({ width: 2, color: 0xffcdd2 });
-        } else {
-          btnGfx.roundRect(btnX, btnY, btnW, btnH, 8)
-            .fill(0x1a2138)
-            .stroke({ width: 1, color: 0x2e3856 });
-        }
+        if (sel) btnGfx.roundRect(btnX, btnY, btnW, btnH, 8 * S).fill(0xd32f2f).stroke({ width: 2 * S, color: 0xffcdd2 });
+        else btnGfx.roundRect(btnX, btnY, btnW, btnH, 8 * S).fill(0x1a2138).stroke({ width: 1 * S, color: 0x2e3856 });
         ui.addChild(btnGfx);
-
         const t = new PIXI.Text({
           text: label,
-          style: {
-            fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-            fontSize: isMobile ? 24 : 18,
-            fontWeight: sel ? 'bold' : 'normal',
-            fill: disabled ? 0x616161 : sel ? 0xffffff : 0xcfd8dc,
-          }
+          style: { fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif", fontSize: (isMobile ? 24 : 18) * S, fontWeight: sel ? 'bold' : 'normal', fill: disabled ? 0x616161 : sel ? 0xffffff : 0xcfd8dc }
         });
-        t.x = RENDER_WIDTH / 2 - t.width / 2;
-        t.y = btnY + (isMobile ? 14 : 9);
+        t.x = this.rw / 2 - t.width / 2;
+        t.y = btnY + (isMobile ? 14 : 9) * S;
         ui.addChild(t);
       });
+      const mf = new PIXI.Text({
+        text: isMobile ? 'Swipe ↕ to choose · Tap to select' : '↑ ↓ choose · Enter select',
+        style: { fontFamily: "'Segoe UI', system-ui, sans-serif", fontSize: (isMobile ? 16 : 13) * S, fill: 0x90a4ae },
+      });
+      mf.x = this.rw / 2 - mf.width / 2;
+      mf.y = this.rh - 40 * S;
+      ui.addChild(mf);
+    } else if (g.state === 'settings') {
+      this.optionList('SETTINGS', ['Touch & Gesture', 'Classic D-Pad'], ['Drag to move · Tap to bounce (recommended)', 'Visible buttons overlay (left / right / jump)'], g.settingsSel, isMobile ? 'Swipe ↕ choose · Tap to apply · 2-finger tap back' : '↑ ↓ choose · Enter apply · Esc back');
+    } else if (g.state === 'controlchoose') {
+      this.optionList('CHOOSE CONTROL', ['Touch & Gesture', 'Classic D-Pad', 'Back'], ['Drag to move · Tap to bounce', 'Visible button overlay', 'Return to menu'], g.chooseSel, isMobile ? 'Swipe ↕ choose · Tap to start' : '↑ ↓ choose · Enter to start');
     } else if (g.state === 'levelselect') {
-      this.panel('SELECT LEVEL', [`Level ${g.selectedLevel} / ${MAX_LEVEL}`, '← → ↑ ↓ to choose · Enter to start · Esc for menu'], 'Enter = Start');
+      this.panel('SELECT LEVEL', [`Level ${g.selectedLevel} / ${MAX_LEVEL}`, isMobile ? 'Swipe to choose · Tap to start' : '← → ↑ ↓ to choose · Enter to start · Esc for menu'], isMobile ? 'Tap = Start' : 'Enter = Start');
     } else if (g.state === 'highscore') {
-      this.panel('HIGH SCORES', [`Best Level: ${g.bestLevel}`, `Top Score: ${g.bestScore} PTS`], 'Enter or Esc = Back');
+      this.panel('HIGH SCORES', [`Best Level: ${g.bestLevel}`, `Top Score: ${g.bestScore} PTS`], isMobile ? 'Tap = Back' : 'Enter or Esc = Back');
     } else if (g.state === 'instructions') {
       const page = INSTRUCTIONS[g.instructionPage] ?? '';
       const words = page.split(' ');
@@ -1016,11 +1059,11 @@ export class Renderer {
         else cur = cur ? cur + ' ' + w : w;
       }
       if (cur) lines.push(cur);
-      this.panel(`INSTRUCTIONS (${g.instructionPage + 1}/6)`, lines.slice(0, 4), '← → Pages · Esc = Back');
+      this.panel(`INSTRUCTIONS (${g.instructionPage + 1}/6)`, lines.slice(0, 4), isMobile ? 'Swipe ← → Pages · Tap = Back' : '← → Pages · Esc = Back');
     } else if (g.state === 'complete') {
-      this.panel('LEVEL COMPLETE!', [`Level ${g.selectedLevel} Cleared!`, `Total Score: ${g.score} PTS`], 'Enter = Next Level · Esc = Menu');
+      this.panel('LEVEL COMPLETE!', [`Level ${g.selectedLevel} Cleared!`, `Total Score: ${g.score} PTS`], isMobile ? 'Tap = Next · Swipe down = Menu' : 'Enter = Next Level · Esc = Menu');
     } else if (g.state === 'gameover') {
-      this.panel('GAME OVER', [...(g.newBest ? ['★ NEW HIGH SCORE! ★'] : []), `Final Score: ${g.score} PTS`], 'Enter = Main Menu');
+      this.panel('GAME OVER', [...(g.newBest ? ['★ NEW HIGH SCORE! ★'] : []), `Final Score: ${g.score} PTS`], isMobile ? 'Tap = Main Menu' : 'Enter = Main Menu');
     }
   }
 }

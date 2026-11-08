@@ -3,29 +3,39 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Bounce Reloaded</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div id="app">
       <div id="frame">
-        <div id="canvas-holder"></div>
-        <div id="touch-controls">
-          <div class="tc-dpad">
-            <button id="btn-up" class="btn-updown dpad-up" aria-label="Up">▲</button>
-            <button id="btn-left" aria-label="Left">◀</button>
-            <button id="btn-right" aria-label="Right">▶</button>
-            <button id="btn-down" class="btn-updown dpad-down" aria-label="Down">▼</button>
+        <div id="canvas-holder">
+          <div id="gesture-layer" aria-label="Touch controls"></div>
+          <div id="pause-badge" aria-label="Pause">❚❚</div>
+          <div id="dpad-controls" hidden>
+            <div class="dp-left">
+              <button id="dp-left" aria-label="Left">◀</button>
+              <button id="dp-right" aria-label="Right">▶</button>
+            </div>
+            <div class="dp-right">
+              <button id="dp-up" class="dp-menu" aria-label="Up">▲</button>
+              <button id="dp-down" class="dp-menu" aria-label="Down">▼</button>
+              <button id="dp-jump" aria-label="Bounce">⬆</button>
+            </div>
           </div>
-          <div class="tc-middle">
-            <button id="btn-pause" aria-label="Pause">II</button>
-          </div>
-          <div class="tc-right">
-            <button id="btn-jump" aria-label="Bounce">⬆</button>
+          <div id="tutorial" hidden>
+            <div class="tut-box">
+              <div id="tut-art" aria-hidden="true">↔️</div>
+              <div id="tut-text">Drag left or right to move</div>
+              <div id="tut-dots" aria-hidden="true"></div>
+              <button id="tut-skip">Skip</button>
+            </div>
           </div>
         </div>
-        <div id="hint">← → / A D move · Space / ↑ bounce · Enter select · P pause · L+R cheat</div>
-        <div id="rotate-hint">Tip: rotate your phone for a bigger view</div>
+        <div id="hint">Drag ← → / A D move · Tap / Space bounce · Swipe up/down menus · Two-finger tap or P pause · L+R cheat</div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
