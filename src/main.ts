@@ -22,14 +22,14 @@ async function boot() {
   // Invisible gesture layer; pause badge + D-Pad visibility mirror state.
   const gestureLayer = document.getElementById('gesture-layer')!;
   const pauseBadge = document.getElementById('pause-badge')!;
-  new GestureController(gestureLayer, input, pauseBadge);
+  new GestureController(gestureLayer, input, pauseBadge, (x, y) => renderer.hitTest(x, y));
   const dpadControls = document.getElementById('dpad-controls')!;
   const dpJump = document.getElementById('dp-jump')!;
   function syncControlUI() {
     const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false;
     document.body.dataset.control = game.controlMode;
-    pauseBadge.classList.toggle('visible', coarse && game.state === 'game');
-    dpadControls.hidden = !(game.controlMode === 'dpad' && coarse);
+    pauseBadge.classList.toggle('visible', game.state === 'game' && (coarse || game.controlMode === 'dpad'));
+    dpadControls.hidden = game.controlMode !== 'dpad';
     const inGame = game.state === 'game';
     dpadControls.classList.toggle('is-menu', !inGame);
     const label = inGame ? '⬆' : 'ENTER';
@@ -59,7 +59,7 @@ async function boot() {
     const steps = [
       { art: '↔️', text: 'Drag ← → to move' },
       { art: '👆', text: 'Tap anywhere to bounce' },
-      { art: '🙌', text: 'Swipe ↕ for menus · Two-finger tap pauses' },
+      { art: '🙌', text: 'Swipe ↕ for menus · Tap ❚❚ to pause' },
     ];
     tutArt.textContent = steps[step].art;
     tutText.textContent = steps[step].text;
@@ -124,8 +124,12 @@ async function boot() {
       }
     } else if (st === 'settings') {
       if (upHit) { input.consumePressed(BTN.Up); game.settingsSel = Math.max(0, game.settingsSel - 1); }
-      if (downHit) { input.consumePressed(BTN.Down); game.settingsSel = Math.min(1, game.settingsSel + 1); }
-      if (okHit) { input.consumePressed(BTN.Cross); game.setControl(game.settingsSel === 1 ? 'dpad' : 'gesture'); }
+      if (downHit) { input.consumePressed(BTN.Down); game.settingsSel = Math.min(2, game.settingsSel + 1); }
+      if (okHit) {
+        input.consumePressed(BTN.Cross);
+        if (game.settingsSel === 2) game.state = 'menu';
+        else game.setControl(game.settingsSel === 1 ? 'dpad' : 'gesture');
+      }
       if (backHit || startHit) { input.consumePressed(BTN.Circle); input.consumePressed(BTN.Start); game.state = 'menu'; }
     } else if (st === 'controlchoose') {
       if (upHit) { input.consumePressed(BTN.Up); game.chooseSel = Math.max(0, game.chooseSel - 1); }

@@ -24,18 +24,22 @@ function tryFullscreen() {
 /**
  * Temple-Run style invisible gesture layer.
  *  Drag left/right -> move (hold) · Tap -> bounce/select
- *  Swipe up/down -> menu nav · Two-finger tap -> pause
+ *  Swipe up/down -> menu nav
+ * Note: double-tap / multi-touch never pause — pause is only the
+ * explicit badge tap (debounced) or keyboard P.
  */
 export class GestureController {
   private pointers = new Map<number, PointerState>();
   private heldDir = 0;
-  private twoFinger = false;
   private triedFullscreen = false;
+  private lastPauseAt = 0;
+  private hitPointerId: number | null = null;
 
   constructor(
     private layer: HTMLElement,
     private input: Input,
     private pauseBadge?: HTMLElement,
+    private hitTest?: (clientX: number, clientY: number) => boolean,
   ) {
     layer.addEventListener('pointerdown', this.onDown);
     layer.addEventListener('pointermove', this.onMove);
@@ -47,6 +51,9 @@ export class GestureController {
       pauseBadge.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         e.stopPropagation();
+        const now = performance.now();
+        if (now - this.lastPauseAt < 700) return; // ignore double-tap on badge
+        this.lastPauseAt = now;
         this.input.tap(BTN.Start);
       });
     }
@@ -55,21 +62,27 @@ export class GestureController {
   private onDown = (e: PointerEvent) => {
     e.preventDefault();
     this.input.lastSource = 'touch';
+    try { this.layer.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     if (!this.triedFullscreen) {
       this.triedFullscreen = true;
       tryFullscreen();
     }
-    if (!this.pointers.has(e.pointerId)) {
-      this.pointers.set(e.pointerId, {
-        startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
-        startT: performance.now(), moved: false,
-      });
+    // Directly-tappable menu/option rows run on pointer-down and consume
+    // the tap, in both Gesture and D-Pad modes.
+    if (this.hitTest && this.pointers.size === 0 && this.hitPointerId === null) {
+      if (this.hitTest(e.clientX, e.clientY)) {
+        this.hitPointerId = e.pointerId;
+        return;
+      }
     }
-    if (this.pointers.size >= 2) {
-      this.twoFinger = true;
-      this.clearHeldDir();
-      this.input.tap(BTN.Start);
-    }
+    // In D-Pad mode, canvas taps outside menu rows do nothing.
+    if (document.body.dataset.control === 'dpad') return;
+    // Ignore extra fingers entirely — they must not map to any game action.
+    if (this.pointers.size > 0) return;
+    this.pointers.set(e.pointerId, {
+      startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY,
+      startT: performance.now(), moved: false,
+    });
   };
 
   private onMove = (e: PointerEvent) => {
@@ -78,7 +91,6 @@ export class GestureController {
     e.preventDefault();
     p.x = e.clientX;
     p.y = e.clientY;
-    if (this.twoFinger) return;
     const dx = p.x - p.startX;
     const dy = p.y - p.startY;
     if (Math.abs(dx) > 12 || Math.abs(dy) > 12) p.moved = true;
@@ -95,14 +107,14 @@ export class GestureController {
   };
 
   private onUp = (e: PointerEvent) => {
+    if (this.hitPointerId === e.pointerId) {
+      this.hitPointerId = null;
+      return;
+    }
     const p = this.pointers.get(e.pointerId);
     if (!p) return;
     e.preventDefault();
     this.pointers.delete(e.pointerId);
-    if (this.twoFinger) {
-      if (this.pointers.size === 0) this.twoFinger = false;
-      return;
-    }
     this.clearHeldDir();
     const dx = p.x - p.startX;
     const dy = p.y - p.startY;

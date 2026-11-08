@@ -262,7 +262,7 @@ export class Game {
 }
 export const INSTRUCTIONS = [
   'Drag left/right to move. Tap anywhere to bounce higher. Collect all rings to open the exit door. (Keyboard: arrows / A D, Space bounce.)',
-  'Blue blocks are bouncy. Red bricks are solid. Avoid spikes! Touch: two-finger tap pauses.',
+  'Blue blocks are bouncy. Red bricks are solid. Avoid spikes! Pause with the corner badge.',
   'Rings: jump through hoops to collect 500 pts. Gems (200 pts) set your checkpoint. Extra life ball gives 1000 pts.',
   'Size matters: big ball bounces lower but survives? Small rings block the big ball. Use red arrows to shrink/grow.',
   'Bonuses: lightning = speed, gravity arrows flip gravity, jump arrows boost jump. All last 300 ticks.',

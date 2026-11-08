@@ -102,6 +102,7 @@ html, body {
   right: 0;
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   z-index: 4;
+  opacity: 0.5;
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
@@ -136,7 +137,6 @@ html, body {
 #dpad-controls .dp-menu { display: none; width: 56px; height: 56px; font-size: 20px; }
 #dpad-controls.is-menu .dp-menu { display: flex; }
 #dpad-controls.is-menu #dp-jump { width: 56px; height: 56px; font-size: 10px; font-weight: 700; }
-body[data-control="dpad"] #gesture-layer { pointer-events: none; }
 
 /* First-run tutorial overlay */
 #tutorial {

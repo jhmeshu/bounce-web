@@ -847,14 +847,34 @@ export class Renderer {
     }
   }
 
+  /** Directly-tappable menu/option rectangles (logical canvas coords). */
+  private hitRects: Array<{ x: number; y: number; w: number; h: number; run: () => void }> = [];
+
+  /** Convert a client point to logical canvas coords and run a hit row, if any. */
+  hitTest(clientX: number, clientY: number): boolean {
+    if (!this.app || this.hitRects.length === 0) return false;
+    const rect = this.app.canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    const lx = (clientX - rect.left) * (this.rw / rect.width);
+    const ly = (clientY - rect.top) * (this.rh / rect.height);
+    for (let i = this.hitRects.length - 1; i >= 0; i--) {
+      const r = this.hitRects[i];
+      if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) {
+        r.run();
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** UI scale: ~0.5× on portrait phones (no overflow), up to ~2× on big desktops. */
   us(): number {
     if (this.rh >= this.rw) return Math.min(0.75, Math.max(0.45, this.rw / 640));
     return Math.min(2.2, Math.max(0.65, Math.min(this.rw / 960, this.rh / 544)));
   }
 
-  /** Option list card for Settings / Choose-Control. */
-  optionList(title: string, labels: string[], descs: string[], sel: number, footer: string) {
+  /** Option list card for Settings / Choose-Control. Rows are directly tappable. */
+  optionList(title: string, labels: string[], descs: string[], sel: number, footer: string, onPick?: (i: number) => void) {
     const isMobile = isCompactLayout();
     const S = this.us();
     const ui = this.uiRoot;
@@ -894,6 +914,7 @@ export class Renderer {
       dt.x = this.rw / 2 - dt.width / 2;
       dt.y = btnY + (isMobile ? 34 : 27) * S;
       ui.addChild(dt);
+      if (onPick) this.hitRects.push({ x: btnX, y: btnY, w: btnW, h: btnH, run: () => onPick(i) });
     });
     const f = new PIXI.Text({
       text: footer,
@@ -999,6 +1020,7 @@ export class Renderer {
     this.lastUiKey = uiKey;
 
     ui.removeChildren();
+    this.hitRects = [];
 
     if (g.state === 'menu') {
       const bg = new PIXI.Graphics();
@@ -1032,18 +1054,31 @@ export class Renderer {
         t.x = this.rw / 2 - t.width / 2;
         t.y = btnY + (isMobile ? 14 : 9) * S;
         ui.addChild(t);
+        if (!disabled) {
+          this.hitRects.push({
+            x: btnX, y: btnY, w: btnW, h: btnH,
+            run: () => { g.menuSel = i; g.menuNav(false, false, true); },
+          });
+        }
       });
       const mf = new PIXI.Text({
-        text: isMobile ? 'Swipe ↕ to choose · Tap to select' : '↑ ↓ choose · Enter select',
+        text: isMobile ? 'Tap an option to select' : '↑ ↓ choose · Enter select',
         style: { fontFamily: "'Segoe UI', system-ui, sans-serif", fontSize: (isMobile ? 16 : 13) * S, fill: 0x90a4ae },
       });
       mf.x = this.rw / 2 - mf.width / 2;
       mf.y = this.rh - 40 * S;
       ui.addChild(mf);
     } else if (g.state === 'settings') {
-      this.optionList('SETTINGS', ['Touch & Gesture', 'Classic D-Pad'], ['Drag to move · Tap to bounce (recommended)', 'Visible buttons overlay (left / right / jump)'], g.settingsSel, isMobile ? 'Swipe ↕ choose · Tap to apply · 2-finger tap back' : '↑ ↓ choose · Enter apply · Esc back');
+      this.optionList('SETTINGS', ['Touch & Gesture', 'Classic D-Pad', 'Back'], ['Drag to move · Tap to bounce (recommended)', 'Visible buttons overlay (left / right / jump)', 'Return to menu'], g.settingsSel, isMobile ? 'Tap an option to apply' : '↑ ↓ choose · Enter apply · Esc back', (i) => {
+        g.settingsSel = i;
+        if (i === 2) g.state = 'menu';
+        else g.setControl(i === 1 ? 'dpad' : 'gesture');
+      });
     } else if (g.state === 'controlchoose') {
-      this.optionList('CHOOSE CONTROL', ['Touch & Gesture', 'Classic D-Pad', 'Back'], ['Drag to move · Tap to bounce', 'Visible button overlay', 'Return to menu'], g.chooseSel, isMobile ? 'Swipe ↕ choose · Tap to start' : '↑ ↓ choose · Enter to start');
+      this.optionList('CHOOSE CONTROL', ['Touch & Gesture', 'Classic D-Pad', 'Back'], ['Drag to move · Tap to bounce', 'Visible button overlay', 'Return to menu'], g.chooseSel, isMobile ? 'Tap an option to start' : '↑ ↓ choose · Enter to start', (i) => {
+        g.chooseSel = i;
+        g.chooseControl(i);
+      });
     } else if (g.state === 'levelselect') {
       this.panel('SELECT LEVEL', [`Level ${g.selectedLevel} / ${MAX_LEVEL}`, isMobile ? 'Swipe to choose · Tap to start' : '← → ↑ ↓ to choose · Enter to start · Esc for menu'], isMobile ? 'Tap = Start' : 'Enter = Start');
     } else if (g.state === 'highscore') {
