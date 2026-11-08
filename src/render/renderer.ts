@@ -679,7 +679,7 @@ export class Renderer {
     const layoutKey = isMobile ? 'compact' : 'wide';
     void HUD_HEIGHT;
     const HUD_H = Math.max(34, Math.round(this.rh * 0.0625));
-    const y0 = this.rh - HUD_H;
+    const y0 = 0; // HUD bar at the top
     const W = this.rw;
     const cx = W / 2;
 
@@ -693,7 +693,7 @@ export class Renderer {
 
       this.hudBg.clear();
       this.hudBg.rect(0, y0, W, HUD_H).fill({ color: 0x0a0f1d, alpha: 0.9 });
-      this.hudBg.rect(0, y0, W, 1.5).fill({ color: 0x00e5ff, alpha: 0.5 });
+      this.hudBg.rect(0, y0 + HUD_H - 1.5, W, 1.5).fill({ color: 0x00e5ff, alpha: 0.5 });
 
       this.hudRingGfx.clear();
       if (isMobile) {
@@ -792,7 +792,7 @@ export class Renderer {
 
       const bw = isMobile ? 90 : 100, bh = isMobile ? 10 : 12;
       const bx = isMobile ? (cx - bw / 2) : (W / 2 + 130);
-      const by = isMobile ? (y0 - 14) : (y0 + 11);
+      const by = isMobile ? (y0 + HUD_H + 4) : (y0 + 11);
 
       this.hudBonusBar.clear();
       this.hudBonusBar.roundRect(bx, by, bw, bh, isMobile ? 3 : 4).fill(0x1a233a);
@@ -820,7 +820,8 @@ export class Renderer {
     bw = Math.min(bw, this.rw * 0.92);
     bh = Math.min(bh, this.rh * 0.12);
     const bx = this.rw / 2 - bw / 2;
-    const by = 16 * S;
+    const hudH = Math.max(34, Math.round(this.rh * 0.0625));
+    const by = hudH + 8 * S;
 
     if (this.lastToastMsg !== msg || !this.toastBanner.visible) {
       this.lastToastMsg = msg;
