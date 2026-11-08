@@ -1,4 +1,5 @@
 import * as PIXI from 'pixi.js';
+import { CullerPlugin, extensions } from 'pixi.js';
 import {
   SCREEN_WIDTH, SCREEN_HEIGHT, HUD_HEIGHT, TILE_SIZE, COL,
   BallState, SizeState, MAX_LEVEL, getMobileZoom
@@ -9,6 +10,9 @@ import { Game, INSTRUCTIONS } from '../core/game';
 import { Input, BTN } from '../core/input';
 import { ParticleSystem } from './particles';
 import { HDTileLibrary } from './hd-tiles';
+
+// Enable automatic viewport culling for marked nodes
+extensions.add(CullerPlugin);
 
 const HD_SCALE = 2;
 const RENDER_WIDTH = SCREEN_WIDTH * HD_SCALE;   // 960
@@ -44,6 +48,74 @@ export class Renderer {
   hudRoot = new PIXI.Container();
   uiRoot = new PIXI.Container();
 
+  // Persistent HUD display elements (zero-allocation per frame)
+  hudBg = new PIXI.Graphics();
+  hudRingGfx = new PIXI.Graphics();
+  hudRingText = new PIXI.Text({
+    text: '',
+    style: {
+      fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+      fontSize: 14,
+      fontWeight: 'bold',
+      fill: 0xffd54f,
+    }
+  });
+  hudScoreText = new PIXI.Text({
+    text: '',
+    style: {
+      fontFamily: "monospace",
+      fontSize: 17,
+      fontWeight: 'bold',
+      fill: 0xffffff,
+      letterSpacing: 2,
+    }
+  });
+  hudLivesGfx = new PIXI.Graphics();
+  hudLivesLabel = new PIXI.Text({
+    text: 'LIVES:',
+    style: {
+      fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+      fontSize: 12,
+      fontWeight: 'bold',
+      fill: 0xb0bec5
+    }
+  });
+  hudBonusBar = new PIXI.Graphics();
+  hudBonusLabel = new PIXI.Text({
+    text: '',
+    style: {
+      fontFamily: 'sans-serif',
+      fontSize: 9,
+      fontWeight: 'bold',
+      fill: 0xffffff
+    }
+  });
+
+  // Persistent Toast elements
+  toastBanner = new PIXI.Graphics();
+  toastText = new PIXI.Text({
+    text: '',
+    style: {
+      fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+      fontSize: 13,
+      fontWeight: 'bold',
+      fill: 0xffeb3b,
+      letterSpacing: 1,
+    }
+  });
+
+  // Dirty tracking for zero-allocation rendering
+  lastHudKey = '';
+  lastScore = -999;
+  lastRings = -999;
+  lastLives = -999;
+  lastBonusVal = -999;
+  lastBonusType = '';
+  lastToastMsg = '';
+  toastActive = false;
+  lastUiKey = '';
+  splashBallGfx: PIXI.Graphics | null = null;
+
   // Camera & Animation State
   smoothCamX = 0;
   smoothCamY = 0;
@@ -70,14 +142,17 @@ export class Renderer {
   }
 
   async init(holder: HTMLElement) {
+    const isMobile = isCompactLayout() || (typeof window !== 'undefined' && window.innerWidth <= 768);
+
     this.app = new PIXI.Application();
     await this.app.init({
       width: RENDER_WIDTH,
       height: RENDER_HEIGHT,
       background: 0x16152b,
-      antialias: true,
+      antialias: !isMobile, // Skip expensive 4x MSAA on mobile for max frame rate
       autoDensity: true,
-      resolution: Math.min(window.devicePixelRatio || 1, 2),
+      resolution: isMobile ? 1 : Math.min(window.devicePixelRatio || 1, 2),
+      powerPreference: 'high-performance',
       preference: 'webgl',
     });
 
@@ -111,8 +186,29 @@ export class Renderer {
       this.particles.container
     );
 
+    this.initHud();
     this.app.stage.addChild(this.gameLayer, this.hudRoot, this.uiRoot);
     this.gameLayer.visible = false;
+  }
+
+  initHud() {
+    this.hudBonusBar.visible = false;
+    this.hudBonusLabel.visible = false;
+    this.toastBanner.visible = false;
+    this.toastText.visible = false;
+
+    this.hudRoot.addChild(
+      this.hudBg,
+      this.hudRingGfx,
+      this.hudRingText,
+      this.hudScoreText,
+      this.hudLivesGfx,
+      this.hudLivesLabel,
+      this.hudBonusBar,
+      this.hudBonusLabel,
+      this.toastBanner,
+      this.toastText
+    );
   }
 
   handleEffect(name: string, x: number, y: number) {
@@ -179,6 +275,7 @@ export class Renderer {
           const g = new PIXI.Graphics(ctx);
           g.x = x * TILE_SIZE;
           g.y = y * TILE_SIZE;
+          g.cullable = true;
           this.staticLayer.addChild(g);
         }
       }
@@ -237,17 +334,21 @@ export class Renderer {
       this.drawBall();
       this.drawHud();
 
+      this.toastActive = false;
       if (g.exitState === 'open') {
         this.drawToast('PORTAL OPEN — REACH THE EXIT!');
       } else if (g.invincible) {
         this.drawToast('CHEAT ACTIVE: INVINCIBLE');
+      } else {
+        this.hideToast();
       }
 
       this.particles.update();
       this.particles.draw();
     } else {
       this.camInitialized = false;
-      this.hudRoot.removeChildren();
+      this.hudRoot.visible = false;
+      this.hideToast();
       this.particles.clear();
       this.drawUi();
     }
@@ -280,6 +381,7 @@ export class Renderer {
             const g = new PIXI.Graphics(ctx);
             g.x = x * TILE_SIZE;
             g.y = y * TILE_SIZE;
+            g.cullable = true;
             this.dynLayer.addChild(g);
           }
         }
@@ -347,10 +449,22 @@ export class Renderer {
     const g = this.hazardLayer;
     g.clear();
 
+    const effScale = HD_SCALE * getMobileZoom();
+    const viewW = RENDER_WIDTH / effScale;
+    const viewH = RENDER_HEIGHT / effScale;
+
     for (const o of lvl.movingObjects) {
       const sx = o.topLeft[0] * 12 + o.offset[0];
       const sy = o.topLeft[1] * 12 + o.offset[1];
       const cx = sx + 12, cy = sy + 12;
+
+      // Skip offscreen spikes for performance
+      if (
+        cx < this.smoothCamX - 36 || cx > this.smoothCamX + viewW + 36 ||
+        cy < this.smoothCamY - 36 || cy > this.smoothCamY + viewH + 36
+      ) {
+        continue;
+      }
 
       // Square steel body
       const half = 8;
@@ -383,25 +497,27 @@ export class Renderer {
     const g = this.waterLayer;
     g.clear();
 
+    const effScale = HD_SCALE * getMobileZoom();
+    const viewW = RENDER_WIDTH / effScale;
+    const viewH = RENDER_HEIGHT / effScale;
+
+    // Viewport-based culling with 2-tile margin
+    const minTX = Math.max(0, Math.floor((this.smoothCamX - 24) / TILE_SIZE));
+    const maxTX = Math.min(lvl.width, Math.ceil((this.smoothCamX + viewW + 24) / TILE_SIZE));
+    const minTY = Math.max(0, Math.floor((this.smoothCamY - 24) / TILE_SIZE));
+    const maxTY = Math.min(lvl.height, Math.ceil((this.smoothCamY + viewH + 24) / TILE_SIZE));
+
     const t = this.animTime * 4;
     // Overlap: extend every water fill past its tile bounds so neighbouring
     // tiles (water↔water, water↔brick) share an opaque overlap instead of
     // leaving an antialiased hairline / wave-dip gap showing the background.
-    // Water is now drawn behind bricks, so the overlap under a brick is
-    // hidden and an opaque fill avoids double-blending darker seams.
     const OVER = 1;
-    const TOP_LIFT = 2; // > wave amplitude (1.6) so the surface always
-    // reaches a brick directly above it (hidden behind that brick).
+    const TOP_LIFT = 2;
 
-    for (let y = 0; y < lvl.height; y++) {
-      for (let x = 0; x < lvl.width; x++) {
+    for (let y = minTY; y < maxTY; y++) {
+      for (let x = minTX; x < maxTX; x++) {
         const raw = tileRawAt(lvl, x, y);
         if ((raw & 0x40) === 0) continue;
-        // Draw water for EVERY water-flag cell, not just empty ones.
-        // Water sits behind the static/dynamic layers, so a submerged
-        // brick/ramp/spike/hoop covers the water under its solid part
-        // while its transparent parts (ramp triangle, spike gaps, hoop
-        // opening) show water instead of a beige background gap.
 
         const wx = x * TILE_SIZE, wy = y * TILE_SIZE;
         const aboveRaw = y === 0 ? 0 : tileRawAt(lvl, x, y - 1);
@@ -419,8 +535,6 @@ export class Renderer {
             x0, wy + TILE_SIZE + OVER
           ], true).fill(0x0277bd);
 
-          // Foam crest line on the (lifted) surface, cell-span only so
-          // neighbouring tiles don't double-draw it.
           const crestY0 = Math.sin((wx + t * 4) * 0.35) * 1.6;
           const crestY1 = Math.sin((wx + TILE_SIZE + t * 4) * 0.35) * 1.6;
           g.moveTo(wx, wy + crestY0 - TOP_LIFT)
@@ -529,222 +643,173 @@ export class Renderer {
   }
 
   drawHud() {
-    const h = this.hudRoot;
-    h.removeChildren();
-
+    this.hudRoot.visible = true;
     const isMobile = isCompactLayout();
+    const layoutKey = isMobile ? 'compact' : 'wide';
     const HUD_H = HUD_HEIGHT * HD_SCALE; // 34px
     const y0 = RENDER_HEIGHT - HUD_H;
     const W = RENDER_WIDTH;
+    const cx = W / 2;
 
-    // Glassmorphism HUD Bar
-    const bg = new PIXI.Graphics();
-    // Dark frosted bar
-    bg.rect(0, y0, W, HUD_H).fill({ color: 0x0a0f1d, alpha: 0.9 });
-    // Glowing top border separator line
-    bg.rect(0, y0, W, 1.5).fill({ color: 0x00e5ff, alpha: 0.5 });
-    h.addChild(bg);
+    if (this.lastHudKey !== layoutKey) {
+      this.lastHudKey = layoutKey;
+      this.lastRings = -999;
+      this.lastScore = -999;
+      this.lastLives = -999;
+      this.lastBonusVal = -999;
+      this.lastBonusType = '';
+
+      this.hudBg.clear();
+      this.hudBg.rect(0, y0, W, HUD_H).fill({ color: 0x0a0f1d, alpha: 0.9 });
+      this.hudBg.rect(0, y0, W, 1.5).fill({ color: 0x00e5ff, alpha: 0.5 });
+
+      this.hudRingGfx.clear();
+      if (isMobile) {
+        this.hudRingGfx.circle(cx - 108, y0 + 17, 7).stroke({ width: 2.2, color: 0xffc107 });
+        this.hudRingGfx.circle(cx - 108, y0 + 17, 5).stroke({ width: 0.8, color: 0xfff9c4 });
+        this.hudRingGfx.circle(cx - 110, y0 + 15, 1.2).fill(0xffffff);
+
+        this.hudRingText.style.fontSize = 14;
+        this.hudRingText.x = cx - 96;
+        this.hudRingText.y = y0 + 8;
+
+        this.hudScoreText.style.fontSize = 16;
+        this.hudScoreText.y = y0 + 7;
+
+        this.hudLivesLabel.visible = false;
+        this.hudBonusLabel.style.fontSize = 8;
+      } else {
+        this.hudRingGfx.circle(20, y0 + 17, 7).stroke({ width: 2.2, color: 0xffc107 });
+        this.hudRingGfx.circle(20, y0 + 17, 5).stroke({ width: 0.8, color: 0xfff9c4 });
+        this.hudRingGfx.circle(18, y0 + 15, 1.2).fill(0xffffff);
+
+        this.hudRingText.style.fontSize = 13;
+        this.hudRingText.x = 34;
+        this.hudRingText.y = y0 + 9;
+
+        this.hudScoreText.style.fontSize = 17;
+        this.hudScoreText.y = y0 + 7;
+
+        this.hudLivesLabel.visible = true;
+        this.hudBonusLabel.style.fontSize = 9;
+      }
+    }
 
     const lvl = this.game.level!;
     const remainRings = Math.max(0, lvl.totalRings - this.game.numRings);
 
-    if (isMobile) {
-      // MOBILE COMPACT HUD: Concentrated in the visible center span (±130px from W/2)
-      const cx = W / 2;
+    // Update rings only when changed
+    if (this.lastRings !== remainRings) {
+      this.lastRings = remainRings;
+      this.hudRingText.text = isMobile ? `${remainRings}` : `RINGS: ${remainRings}`;
+      this.hudRingText.style.fill = remainRings === 0 ? 0x00e676 : 0xffd54f;
+    }
 
-      // 1. Ring Counter (Left of center)
-      const ringGfx = new PIXI.Graphics();
-      ringGfx.circle(cx - 108, y0 + 17, 7).stroke({ width: 2.2, color: 0xffc107 });
-      ringGfx.circle(cx - 108, y0 + 17, 5).stroke({ width: 0.8, color: 0xfff9c4 });
-      ringGfx.circle(cx - 110, y0 + 15, 1.2).fill(0xffffff);
-      h.addChild(ringGfx);
+    // Update score only when changed
+    if (this.lastScore !== this.game.score) {
+      this.lastScore = this.game.score;
+      this.hudScoreText.text = String(this.game.score).padStart(isMobile ? 6 : 8, '0');
+      this.hudScoreText.x = cx - this.hudScoreText.width / 2;
+    }
 
-      const ringText = new PIXI.Text({
-        text: `${remainRings}`,
-        style: {
-          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: 14,
-          fontWeight: 'bold',
-          fill: remainRings === 0 ? 0x00e676 : 0xffd54f,
-        }
-      });
-      ringText.x = cx - 96;
-      ringText.y = y0 + 8;
-      h.addChild(ringText);
-
-      // 2. Score (Dead center)
-      const scoreText = new PIXI.Text({
-        text: String(this.game.score).padStart(6, '0'),
-        style: {
-          fontFamily: "monospace",
-          fontSize: 16,
-          fontWeight: 'bold',
-          fill: 0xffffff,
-          letterSpacing: 2,
-        }
-      });
-      scoreText.x = cx - scoreText.width / 2;
-      scoreText.y = y0 + 7;
-      h.addChild(scoreText);
-
-      // 3. Lives Counter (Right of center)
-      const livesGfx = new PIXI.Graphics();
+    // Update lives only when changed
+    if (this.lastLives !== this.game.numLives) {
+      this.lastLives = this.game.numLives;
       const numLives = Math.max(0, this.game.numLives);
-      for (let i = 0; i < numLives; i++) {
-        const lx = cx + 75 + i * 15;
-        const ly = y0 + 17;
-        livesGfx.circle(lx, ly, 5.5).fill(0xd32f2f);
-        livesGfx.circle(lx - 2, ly - 2, 2).fill(0xff8a80);
-        livesGfx.circle(lx - 2, ly - 2, 0.8).fill(0xffffff);
-        livesGfx.circle(lx, ly, 5.5).stroke({ width: 0.8, color: 0x5d0000 });
+      this.hudLivesGfx.clear();
+      if (isMobile) {
+        for (let i = 0; i < numLives; i++) {
+          const lx = cx + 75 + i * 15;
+          const ly = y0 + 17;
+          this.hudLivesGfx.circle(lx, ly, 5.5).fill(0xd32f2f);
+          this.hudLivesGfx.circle(lx - 2, ly - 2, 2).fill(0xff8a80);
+          this.hudLivesGfx.circle(lx - 2, ly - 2, 0.8).fill(0xffffff);
+          this.hudLivesGfx.circle(lx, ly, 5.5).stroke({ width: 0.8, color: 0x5d0000 });
+        }
+      } else {
+        const livesX = W - 30;
+        for (let i = 0; i < numLives; i++) {
+          const lx = livesX - i * 18;
+          const ly = y0 + 17;
+          this.hudLivesGfx.circle(lx, ly, 6).fill(0xd32f2f);
+          this.hudLivesGfx.circle(lx - 2, ly - 2, 2.5).fill(0xff8a80);
+          this.hudLivesGfx.circle(lx - 2.5, ly - 2.5, 1).fill(0xffffff);
+          this.hudLivesGfx.circle(lx, ly, 6).stroke({ width: 0.8, color: 0x5d0000 });
+        }
+        this.hudLivesLabel.x = livesX - (numLives * 18) - this.hudLivesLabel.width - 6;
+        this.hudLivesLabel.y = y0 + 9;
       }
-      h.addChild(livesGfx);
+    }
 
-      // 4. Power-Up Status Bar (Compact above HUD in center)
-      const maxBonus = Math.max(
-        this.game.player.speedBonusCntr,
-        this.game.player.gravBonusCntr,
-        this.game.player.jumpBonusCntr
-      );
-      if (maxBonus > 0) {
-        const bw = 90, bh = 10;
-        const bx = cx - bw / 2, by = y0 - 14;
-        const barGfx = new PIXI.Graphics();
-        barGfx.roundRect(bx, by, bw, bh, 3).fill(0x1a233a);
-        barGfx.roundRect(bx, by, bw, bh, 3).stroke({ width: 1, color: 0x4fc3f7 });
+    // Update powerup status bar
+    const maxBonus = Math.max(
+      this.game.player.speedBonusCntr,
+      this.game.player.gravBonusCntr,
+      this.game.player.jumpBonusCntr
+    );
+    if (maxBonus > 0) {
+      this.hudBonusBar.visible = true;
+      this.hudBonusLabel.visible = true;
+      const label = this.game.player.speedBonusCntr > 0 ? 'SPEED' :
+                    this.game.player.gravBonusCntr > 0 ? (isMobile ? 'GRAV' : 'GRAVITY') : 'JUMP';
 
-        const fillW = Math.max(0, (bw - 2) * (maxBonus / 300));
-        barGfx.roundRect(bx + 1, by + 1, fillW, bh - 2, 2).fill(0xff7043);
-        h.addChild(barGfx);
-
-        const label = this.game.player.speedBonusCntr > 0 ? 'SPEED' :
-                      this.game.player.gravBonusCntr > 0 ? 'GRAV' : 'JUMP';
-        const bonusLabel = new PIXI.Text({
-          text: label,
-          style: { fontFamily: 'sans-serif', fontSize: 8, fontWeight: 'bold', fill: 0xffffff }
-        });
-        bonusLabel.x = bx + bw / 2 - bonusLabel.width / 2;
-        bonusLabel.y = by - 1;
-        h.addChild(bonusLabel);
+      if (this.lastBonusType !== label) {
+        this.lastBonusType = label;
+        this.hudBonusLabel.text = label;
       }
+
+      const bw = isMobile ? 90 : 100, bh = isMobile ? 10 : 12;
+      const bx = isMobile ? (cx - bw / 2) : (W / 2 + 130);
+      const by = isMobile ? (y0 - 14) : (y0 + 11);
+
+      this.hudBonusBar.clear();
+      this.hudBonusBar.roundRect(bx, by, bw, bh, isMobile ? 3 : 4).fill(0x1a233a);
+      this.hudBonusBar.roundRect(bx, by, bw, bh, isMobile ? 3 : 4).stroke({ width: 1, color: 0x4fc3f7 });
+
+      const fillW = Math.max(0, (bw - 2) * (maxBonus / 300));
+      this.hudBonusBar.roundRect(bx + 1, by + 1, fillW, bh - 2, isMobile ? 2 : 3).fill(0xff7043);
+
+      this.hudBonusLabel.x = bx + bw / 2 - this.hudBonusLabel.width / 2;
+      this.hudBonusLabel.y = by - 1;
     } else {
-      // DESKTOP WIDE HUD
-      // 1. Ring Counter (Left)
-      const ringGfx = new PIXI.Graphics();
-      ringGfx.circle(20, y0 + 17, 7).stroke({ width: 2.2, color: 0xffc107 });
-      ringGfx.circle(20, y0 + 17, 5).stroke({ width: 0.8, color: 0xfff9c4 });
-      ringGfx.circle(18, y0 + 15, 1.2).fill(0xffffff);
-      h.addChild(ringGfx);
-
-      const ringText = new PIXI.Text({
-        text: `RINGS: ${remainRings}`,
-        style: {
-          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: 13,
-          fontWeight: 'bold',
-          fill: remainRings === 0 ? 0x00e676 : 0xffd54f,
-        }
-      });
-      ringText.x = 34;
-      ringText.y = y0 + 9;
-      h.addChild(ringText);
-
-      // 2. Arcade Digital Score (Center)
-      const scoreText = new PIXI.Text({
-        text: String(this.game.score).padStart(8, '0'),
-        style: {
-          fontFamily: "monospace",
-          fontSize: 17,
-          fontWeight: 'bold',
-          fill: 0xffffff,
-          letterSpacing: 2,
-        }
-      });
-      scoreText.x = W / 2 - scoreText.width / 2;
-      scoreText.y = y0 + 7;
-      h.addChild(scoreText);
-
-      // 3. Power-Up Status Bar (Center-Right)
-      const maxBonus = Math.max(
-        this.game.player.speedBonusCntr,
-        this.game.player.gravBonusCntr,
-        this.game.player.jumpBonusCntr
-      );
-      if (maxBonus > 0) {
-        const bx = W / 2 + 130, by = y0 + 11;
-        const bw = 100, bh = 12;
-        const barGfx = new PIXI.Graphics();
-        barGfx.roundRect(bx, by, bw, bh, 4).fill(0x1a233a);
-        barGfx.roundRect(bx, by, bw, bh, 4).stroke({ width: 1, color: 0x4fc3f7 });
-
-        const fillW = Math.max(0, (bw - 2) * (maxBonus / 300));
-        barGfx.roundRect(bx + 1, by + 1, fillW, bh - 2, 3).fill(0xff7043);
-        h.addChild(barGfx);
-
-        const label = this.game.player.speedBonusCntr > 0 ? 'SPEED' :
-                      this.game.player.gravBonusCntr > 0 ? 'GRAVITY' : 'JUMP';
-        const bonusLabel = new PIXI.Text({
-          text: label,
-          style: { fontFamily: 'sans-serif', fontSize: 9, fontWeight: 'bold', fill: 0xffffff }
-        });
-        bonusLabel.x = bx + bw / 2 - bonusLabel.width / 2;
-        bonusLabel.y = by - 1;
-        h.addChild(bonusLabel);
+      if (this.hudBonusBar.visible) {
+        this.hudBonusBar.visible = false;
+        this.hudBonusLabel.visible = false;
+        this.lastBonusType = '';
       }
-
-      // 4. Lives Counter (Right)
-      const livesX = W - 30;
-      const livesGfx = new PIXI.Graphics();
-      for (let i = 0; i < Math.max(0, this.game.numLives); i++) {
-        const lx = livesX - i * 18;
-        const ly = y0 + 17;
-        livesGfx.circle(lx, ly, 6).fill(0xd32f2f);
-        livesGfx.circle(lx - 2, ly - 2, 2.5).fill(0xff8a80);
-        livesGfx.circle(lx - 2.5, ly - 2.5, 1).fill(0xffffff);
-        livesGfx.circle(lx, ly, 6).stroke({ width: 0.8, color: 0x5d0000 });
-      }
-      h.addChild(livesGfx);
-
-      const livesLabel = new PIXI.Text({
-        text: 'LIVES:',
-        style: {
-          fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: 12,
-          fontWeight: 'bold',
-          fill: 0xb0bec5
-        }
-      });
-      livesLabel.x = livesX - (Math.max(0, this.game.numLives) * 18) - livesLabel.width - 6;
-      livesLabel.y = y0 + 9;
-      h.addChild(livesLabel);
     }
   }
 
   drawToast(msg: string) {
+    this.toastActive = true;
     const isMobile = isCompactLayout();
-    const banner = new PIXI.Graphics();
     const bw = isMobile ? 460 : 380, bh = isMobile ? 48 : 32;
     const bx = RENDER_WIDTH / 2 - bw / 2;
     const by = 20;
 
-    banner.roundRect(bx, by, bw, bh, 16)
-      .fill({ color: 0x0d1b2a, alpha: 0.88 })
-      .stroke({ width: 1.5, color: 0x00e5ff });
-    this.hudRoot.addChild(banner);
+    if (this.lastToastMsg !== msg || !this.toastBanner.visible) {
+      this.lastToastMsg = msg;
+      this.toastBanner.clear();
+      this.toastBanner.roundRect(bx, by, bw, bh, 16)
+        .fill({ color: 0x0d1b2a, alpha: 0.88 })
+        .stroke({ width: 1.5, color: 0x00e5ff });
 
-    const t = new PIXI.Text({
-      text: msg,
-      style: {
-        fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-        fontSize: isMobile ? 20 : 13,
-        fontWeight: 'bold',
-        fill: 0xffeb3b,
-        letterSpacing: 1,
-      }
-    });
-    t.x = RENDER_WIDTH / 2 - t.width / 2;
-    t.y = isMobile ? by + 10 : by + 7;
-    this.hudRoot.addChild(t);
+      this.toastText.text = msg;
+      this.toastText.style.fontSize = isMobile ? 20 : 13;
+      this.toastText.x = RENDER_WIDTH / 2 - this.toastText.width / 2;
+      this.toastText.y = isMobile ? by + 10 : by + 7;
+
+      this.toastBanner.visible = true;
+      this.toastText.visible = true;
+    }
+  }
+
+  hideToast() {
+    if (this.toastBanner.visible) {
+      this.toastBanner.visible = false;
+      this.toastText.visible = false;
+      this.lastToastMsg = '';
+    }
   }
 
   panel(title: string, lines: string[], footer: string): void {
@@ -821,29 +886,38 @@ export class Renderer {
     const isMobile = isCompactLayout();
     const g = this.game;
     const ui = this.uiRoot;
-    ui.removeChildren();
 
     if (g.state === 'splash') {
+      const ballBounceY = isMobile ? 170 + Math.sin(this.animTime * 3) * 22 : 150 + Math.sin(this.animTime * 3) * 20;
+      if (this.lastUiKey === 'splash' && this.splashBallGfx) {
+        this.splashBallGfx.y = ballBounceY;
+        return;
+      }
+      this.lastUiKey = 'splash';
+      ui.removeChildren();
+
       const bg = new PIXI.Graphics();
       bg.rect(0, 0, RENDER_WIDTH, RENDER_HEIGHT).fill(0x0c102b);
       ui.addChild(bg);
 
-      // Animated floating 3D ball — mobile ~2x (radius 32→52)
-      const ballBounceY = isMobile ? 170 + Math.sin(this.animTime * 3) * 22 : 150 + Math.sin(this.animTime * 3) * 20;
+      // Animated floating 3D ball
       const ballR = isMobile ? 52 : 32;
       const ball = new PIXI.Graphics();
-      ball.circle(RENDER_WIDTH / 2, ballBounceY, ballR).fill(0x8a0b12);
-      ball.circle(RENDER_WIDTH / 2 - 6, ballBounceY - 6, ballR * 0.88).fill(0xd32f2f);
-      ball.circle(RENDER_WIDTH / 2 - 12, ballBounceY - 12, ballR * 0.56).fill(0xf44336);
-      ball.circle(RENDER_WIDTH / 2 - 16, ballBounceY - 16, ballR * 0.25).fill(0xffffff);
-      ball.circle(RENDER_WIDTH / 2, ballBounceY, ballR).stroke({ width: 2, color: 0x4a0508 });
+      ball.circle(0, 0, ballR).fill(0x8a0b12);
+      ball.circle(-6, -6, ballR * 0.88).fill(0xd32f2f);
+      ball.circle(-12, -12, ballR * 0.56).fill(0xf44336);
+      ball.circle(-16, -16, ballR * 0.25).fill(0xffffff);
+      ball.circle(0, 0, ballR).stroke({ width: 2, color: 0x4a0508 });
+      ball.x = RENDER_WIDTH / 2;
+      ball.y = ballBounceY;
+      this.splashBallGfx = ball;
       ui.addChild(ball);
 
       const t = new PIXI.Text({
-        text: 'BOUNCE ZERO HD',
+        text: 'BOUNCE RELOADED',
         style: {
           fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: isMobile ? 52 : 48,
+          fontSize: isMobile ? 48 : 46,
           fontWeight: '900',
           fill: 0xffffff,
           letterSpacing: isMobile ? 2 : 3,
@@ -864,17 +938,27 @@ export class Renderer {
       sub.x = RENDER_WIDTH / 2 - sub.width / 2;
       sub.y = isMobile ? 352 : 300;
       ui.addChild(sub);
-    } else if (g.state === 'menu') {
+      return;
+    }
+
+    this.splashBallGfx = null;
+    const uiKey = `${g.state}:${g.menuSel}:${g.selectedLevel}:${g.instructionPage}:${isMobile ? 'm' : 'd'}`;
+    if (this.lastUiKey === uiKey) return;
+    this.lastUiKey = uiKey;
+
+    ui.removeChildren();
+
+    if (g.state === 'menu') {
       const bg = new PIXI.Graphics();
       bg.rect(0, 0, RENDER_WIDTH, RENDER_HEIGHT).fill(0x0d1124);
       ui.addChild(bg);
 
-      // Header — mobile ~2x (32→52)
+      // Header — BOUNCE RELOADED
       const title = new PIXI.Text({
-        text: 'BOUNCE HD',
+        text: 'BOUNCE RELOADED',
         style: {
           fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
-          fontSize: isMobile ? 52 : 44,
+          fontSize: isMobile ? 48 : 44,
           fontWeight: 'bold',
           fill: 0xff5252,
           letterSpacing: 2,
