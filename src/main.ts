@@ -46,21 +46,31 @@ async function boot() {
   const tutSkip = document.getElementById('tut-skip')!;
   const isCoarse = () => window.matchMedia?.('(pointer: coarse)').matches ?? false;
   let tutStep = -1;
-  let tutDone = false;
-  try { tutDone = localStorage.getItem('bounce_tut_seen') === '1'; } catch { /* ignore */ }
+  const tutKey = () => `bounce_tut_seen_${game.controlMode}`;
+  const isTutDone = () => {
+    try { return localStorage.getItem(tutKey()) === '1'; } catch { return false; }
+  };
   function tutFinish() {
     tutStep = -1;
     tutEl.hidden = true;
-    tutDone = true;
-    try { localStorage.setItem('bounce_tut_seen', '1'); } catch { /* ignore */ }
+    try { localStorage.setItem(tutKey(), '1'); } catch { /* ignore */ }
+  }
+  function tutSteps() {
+    return game.controlMode === 'dpad'
+      ? [
+          { art: '◀▶', text: 'Hold ◀ ▶ buttons to move' },
+          { art: '⬆', text: 'Tap ⬆ to bounce' },
+          { art: '❚❚', text: 'Tap ❚❚ to pause · ▲▼ navigate menus' },
+        ]
+      : [
+          { art: '↔️', text: 'Drag ← → to move' },
+          { art: '👆', text: 'Tap anywhere to bounce' },
+          { art: '🙌', text: 'Swipe ↕ for menus · Tap ❚❚ to pause' },
+        ];
   }
   function tutShow(step: number) {
     tutStep = step;
-    const steps = [
-      { art: '↔️', text: 'Drag ← → to move' },
-      { art: '👆', text: 'Tap anywhere to bounce' },
-      { art: '🙌', text: 'Swipe ↕ for menus · Tap ❚❚ to pause' },
-    ];
+    const steps = tutSteps();
     tutArt.textContent = steps[step].art;
     tutText.textContent = steps[step].text;
     tutDots.innerHTML = steps.map((_, i) => `<i class="${i === step ? 'on' : ''}"></i>`).join('');
@@ -68,7 +78,7 @@ async function boot() {
   }
   tutSkip.addEventListener('click', tutFinish);
   function tutorialTick() {
-    if (tutDone || !isCoarse() || game.controlMode !== 'gesture') return;
+    if (isTutDone() || (!isCoarse() && game.controlMode !== 'dpad')) return;
     if (tutStep === -1) {
       if (game.state === 'game') tutShow(0);
       return;

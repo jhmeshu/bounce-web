@@ -6,7 +6,7 @@ import {
 } from '../core/constants';
 import { TILE_DB, TF } from '../core/tiles';
 import { LevelData, tileRawAt } from '../core/level';
-import { Game, INSTRUCTIONS } from '../core/game';
+import { Game, getInstructions } from '../core/game';
 import { Input, BTN } from '../core/input';
 import { ParticleSystem } from './particles';
 import { HDTileLibrary } from './hd-tiles';
@@ -1085,7 +1085,7 @@ export class Renderer {
     } else if (g.state === 'highscore') {
       this.panel('HIGH SCORES', [`Best Level: ${g.bestLevel}`, `Top Score: ${g.bestScore} PTS`], isMobile ? 'Tap = Back' : 'Enter or Esc = Back');
     } else if (g.state === 'instructions') {
-      const page = INSTRUCTIONS[g.instructionPage] ?? '';
+      const page = getInstructions(g.controlMode, !isMobile)[g.instructionPage] ?? '';
       const words = page.split(' ');
       const lines: string[] = [];
       let cur = '';

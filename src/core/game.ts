@@ -260,11 +260,19 @@ export class Game {
     void this.startLevel(1, true);
   }
 }
-export const INSTRUCTIONS = [
-  'Drag left/right to move. Tap anywhere to bounce higher. Collect all rings to open the exit door. (Keyboard: arrows / A D, Space bounce.)',
-  'Blue blocks are bouncy. Red bricks are solid. Avoid spikes! Pause with the corner badge.',
-  'Rings: jump through hoops to collect 500 pts. Gems (200 pts) set your checkpoint. Extra life ball gives 1000 pts.',
-  'Size matters: big ball bounces lower but survives? Small rings block the big ball. Use red arrows to shrink/grow.',
-  'Bonuses: lightning = speed, gravity arrows flip gravity, jump arrows boost jump. All last 300 ticks.',
-  'Finish all 11 levels. Exit gives 5000 pts. Good luck!',
-];
+export function getInstructions(mode: ControlMode, isKeyboard: boolean): string[] {
+  const controls = isKeyboard
+    ? 'Left/Right arrows or A/D to move. Space or Up to bounce higher. Enter selects, P pauses. Collect all rings to open the exit door.'
+    : mode === 'dpad'
+      ? 'Hold the ◀ ▶ buttons to move. Tap ⬆ to bounce higher. In menus use ▲ ▼ to choose and ⬆ (ENTER) to select — or tap a row directly. Pause with the ❚❚ badge.'
+      : 'Drag left/right to move. Tap anywhere to bounce higher. Swipe up/down in menus, or tap a row directly. Pause with the ❚❚ badge.';
+  return [
+    controls,
+    'Blue blocks are bouncy. Red bricks are solid. Avoid spikes! Pause with the corner badge.',
+    'Rings: jump through hoops to collect 500 pts. Gems (200 pts) set your checkpoint. Extra life ball gives 1000 pts.',
+    'Size matters: big ball bounces lower but survives? Small rings block the big ball. Use red arrows to shrink/grow.',
+    'Bonuses: lightning = speed, gravity arrows flip gravity, jump arrows boost jump. All last 300 ticks.',
+    'Finish all 11 levels. Exit gives 5000 pts. Good luck!',
+  ];
+}
+export const INSTRUCTIONS = getInstructions('gesture', false);
