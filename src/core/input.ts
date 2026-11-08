@@ -5,6 +5,7 @@ export class Input {
   private pressed = new Set<number>();
   private released = new Set<number>();
   private keyMap = new Map<string, number>();
+  private btnPointers = new Map<number, Set<number>>();
   cheatArmedR = false;
   lastSource: 'keyboard' | 'touch' | null = null;
   constructor() {
@@ -19,6 +20,9 @@ export class Input {
     this.keyMap.set('escape', BTN.Circle); this.keyMap.set('x', BTN.Circle);
     this.keyMap.set('p', BTN.Start);
     this.keyMap.set('q', BTN.L); this.keyMap.set('e', BTN.R);
+    const clearOnBlur = () => { this.heldMask = 0; this.btnPointers.clear(); this.resetEdges(); };
+    window.addEventListener('blur', clearOnBlur);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) clearOnBlur(); });
     window.addEventListener('keydown', (e) => {
       this.lastSource = 'keyboard';
       const k = e.key.toLowerCase();
@@ -84,6 +88,9 @@ export class Input {
       } catch {}
       if (!(this.heldMask & btn)) this.pressed.add(btn);
       this.heldMask |= btn;
+      let ids = this.btnPointers.get(btn);
+      if (!ids) { ids = new Set(); this.btnPointers.set(btn, ids); }
+      ids.add(e.pointerId);
     };
     const up = (e: PointerEvent) => {
       e.preventDefault();
@@ -92,8 +99,13 @@ export class Input {
           el.releasePointerCapture(e.pointerId);
         }
       } catch {}
-      this.heldMask &= ~btn;
-      this.released.add(btn);
+      const ids = this.btnPointers.get(btn);
+      if (ids) ids.delete(e.pointerId);
+      if (ids && ids.size > 0) return;
+      if (this.heldMask & btn) {
+        this.heldMask &= ~btn;
+        this.released.add(btn);
+      }
     };
     el.addEventListener('pointerdown', down as EventListener);
     el.addEventListener('pointerup', up as EventListener);

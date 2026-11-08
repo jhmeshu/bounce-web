@@ -34,7 +34,7 @@ export const MAX_HORZ_BONUS_SPEED = 100;
 export const MIN_BOUNCE_SPEED = 10;
 export const ROOF_COLLISION_SPEED = 20;
 export const BONUS_DURATION = 300;
-export const POPPED_FRAMES = 5;
+export const POPPED_FRAMES = 7;
 export const THIN_TILE_SIZE = 4;
 export const MOVEMENT_STEP_DIVISOR = 10;
 // Cap for the free-space placement walk. The original has no cap (its offset is a
@@ -89,14 +89,16 @@ export const COL = {
 };
 
 // View window (game units): desktop 480×272, touch-landscape 240×136,
-// touch-portrait 156×277 (taller, Nokia-style portrait view).
+// touch-portrait 156×240 (shorter than a full-screen fit: the D-pad overlays
+// the bottom of the screen, and a taller view pushed the stage under the
+// buttons — the camera also keeps the ball near the middle in portrait).
 export interface ViewSize { viewW: number; viewH: number }
 export function getViewSize(): ViewSize {
   if (typeof window === 'undefined') return { viewW: SCREEN_WIDTH, viewH: SCREEN_HEIGHT };
   const coarse = typeof window.matchMedia !== 'undefined' && window.matchMedia('(pointer: coarse)').matches;
   const isTouch = coarse || window.innerWidth <= 768;
   if (!isTouch) return { viewW: SCREEN_WIDTH, viewH: SCREEN_HEIGHT };
-  return window.innerHeight >= window.innerWidth ? { viewW: 156, viewH: 277 } : { viewW: 240, viewH: 136 };
+  return window.innerHeight >= window.innerWidth ? { viewW: 156, viewH: 240 } : { viewW: 240, viewH: 136 };
 }
 export function getMobileZoom(): number {
   return SCREEN_WIDTH / getViewSize().viewW;
@@ -119,5 +121,4 @@ export interface Player {
   popCntr: number; slideCntr: number;
   isInWater: boolean;
   groundedTimer?: number;
-  slopeStuckCntr?: number; lastSlopeX?: number; lastSlopeY?: number;
 }

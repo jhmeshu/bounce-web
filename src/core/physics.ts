@@ -91,13 +91,22 @@ function squareCollide(p: Player, row: number, col: number): boolean {
   }
   return false;
 }
+// Faithful port of f.java b(int). The original keeps whichever of the existing
+// xSpeed and the derived value is "larger" toward the slope's downhill side, so
+// a fall onto a catching ramp lands instead of being flung sideways: the plain
+// swap this port used before turned a vertical fall onto ramps 34/35 into a
+// full-speed horizontal launch.
 function redirectBall(p: Player, id: number) {
   const old = p.xSpeed;
   switch (id) {
-    case 35: case 37: p.xSpeed = p.ySpeed; p.ySpeed = old; break;
-    case 31: case 33: p.xSpeed = (p.ySpeed >> 1); p.ySpeed = (old >> 1); break;
-    case 34: case 36: p.xSpeed = -p.ySpeed; p.ySpeed = -old; break;
-    case 30: case 32: p.xSpeed = -(p.ySpeed >> 1); p.ySpeed = -(old >> 1); break;
+    case 35: p.xSpeed = (p.xSpeed > -p.ySpeed) ? p.xSpeed : p.ySpeed; p.ySpeed = old; break;
+    case 37: p.xSpeed = (-p.xSpeed > p.ySpeed) ? p.xSpeed : p.ySpeed; p.ySpeed = old; break;
+    case 34: p.xSpeed = (p.xSpeed < p.ySpeed) ? p.xSpeed : -p.ySpeed; p.ySpeed = -old; break;
+    case 36: p.xSpeed = (p.xSpeed > p.ySpeed) ? p.xSpeed : -p.ySpeed; p.ySpeed = -old; break;
+    case 31: p.xSpeed = (p.xSpeed > -p.ySpeed) ? p.xSpeed : (p.ySpeed >> 1); p.ySpeed = old; break;
+    case 33: p.xSpeed = (-p.xSpeed > p.ySpeed) ? p.xSpeed : (p.ySpeed >> 1); p.ySpeed = old; break;
+    case 30: p.xSpeed = (p.xSpeed < p.ySpeed) ? p.xSpeed : -(p.ySpeed >> 1); p.ySpeed = -old; break;
+    case 32: p.xSpeed = (p.xSpeed > p.ySpeed) ? p.xSpeed : -(p.ySpeed >> 1); p.ySpeed = -old; break;
   }
 }
 function triangleCollide(p: Player, row: number, col: number, id: number): boolean {
@@ -218,15 +227,19 @@ function testTile(p: Player, lvl: LevelData, ty: number, tx: number, canMove: bo
   } else if (id === 2) {
     if (squareCollide(p, ty, tx)) { p.mCDRubberFlag = true; canMove = false; } else p.mCDRampFlag = true;
   } else if (id >= 3 && id <= 6) {
-    if (thinCollide(p, ty, tx, id)) { canMove = false; if (hooks) popBall(p, hooks); }
+    // Only a real movement step pops the ball. Probes never occupy this box,
+    // so with real hooks they killed the ball for merely walking beneath
+    // spikes — and the ground probe fired popBall through PROBE_HOOKS.
+    if (thinCollide(p, ty, tx, id)) { canMove = false; if (hooks && !probe) popBall(p, hooks); }
   } else if (id === 10) {
     const idx = findMovingObjectAt(lvl, tx, ty);
     if (idx !== -1) {
       const obj = lvl.movingObjects[idx];
       const sx = obj.topLeft[0] * TILE_SIZE + obj.offset[0];
       const sy = obj.topLeft[1] * TILE_SIZE + obj.offset[1];
-      if (rectCollide(p.globalBallX, p.globalBallY, p.globalBallX + p.ballSize, p.globalBallY + p.ballSize, sx, sy, sx + 24, sy + 24)) {
-        canMove = false; if (hooks) popBall(p, hooks);
+      // Both boxes shrink by 1px (f.java DynThorns check): edge-to-edge grazes survive.
+      if (rectCollide(p.globalBallX + 1, p.globalBallY + 1, p.globalBallX + p.ballSize - 1, p.globalBallY + p.ballSize - 1, sx + 1, sy + 1, sx + 24 - 1, sy + 24 - 1)) {
+        canMove = false; if (hooks && !probe) popBall(p, hooks);
       }
     }
   } else if (id >= 13 && id <= 24) {
@@ -277,7 +290,9 @@ function testTile(p: Player, lvl: LevelData, ty: number, tx: number, canMove: bo
       }
       break;
     case TILE_CHECKPOINT:
-      if (!probe) { hooks.addScore(200); hooks.setRespawn(tx, ty); }
+      // The score lives in Game.setRespawn (GEM_POINTS, matching f.java's single
+      // AddScore(200)); adding here too charged 400 per gem.
+      if (!probe) hooks.setRespawn(tx, ty);
       break;
     case TILE_EXIT:
       if (thinCollide(p, ty, tx, id)) {
@@ -374,6 +389,9 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
   }
   p.slideCntr++; if (p.slideCntr === 3) p.slideCntr = 0;
   clampSpeed(p);
+  // f.java: outside water and reverse gravity, a downward speed in (0,10) is
+  // bumped to 10 at frame top, so falls leave the apex promptly.
+  if (!p.isInWater && !reverse && p.ySpeed > 0 && p.ySpeed < MIN_BOUNCE_SPEED) p.ySpeed = MIN_BOUNCE_SPEED;
 
   const yIters = Math.floor(Math.abs(p.ySpeed) / MOVEMENT_STEP_DIVISOR);
   let slidOffSlope = false;
@@ -406,12 +424,15 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
       const fallingToGround = yStep > 0 || (reverse && yStep < 0);
       if (p.mCDRampFlag && fallingToGround) {
         // Try down-slope diagonals; larger steps clear a riser / tip
-        // or large ball that a 1px diagonal still overlaps.
+        // or large ball that a 1px diagonal still overlaps. These are
+        // feasibility probes, not movement: PROBE_HOOKS + probe so they
+        // cannot pop the ball on spikes, consume pickups, or complete
+        // the level through the exit box they merely overlap.
         for (const d of [1, 2, 3, 6]) {
           p.xSpeed = probeXs; p.ySpeed = probeYs;
-          if (collisionDetection(p, lvl, p.xPos + d, p.yPos + yStep * d, hooks, false)) { p.xPos += d; p.yPos += yStep * d; slidOffSlope = true; break; }
+          if (collisionDetection(p, lvl, p.xPos + d, p.yPos + yStep * d, PROBE_HOOKS, true)) { p.xPos += d; p.yPos += yStep * d; slidOffSlope = true; break; }
           p.xSpeed = probeXs; p.ySpeed = probeYs;
-          if (collisionDetection(p, lvl, p.xPos - d, p.yPos + yStep * d, hooks, false)) { p.xPos -= d; p.yPos += yStep * d; slidOffSlope = true; break; }
+          if (collisionDetection(p, lvl, p.xPos - d, p.yPos + yStep * d, PROBE_HOOKS, true)) { p.xPos -= d; p.yPos += yStep * d; slidOffSlope = true; break; }
         }
         // Keep the fall speed that brought us here (>=10) so the next
         // frame slides again instead of rebuilding from ~0.
@@ -434,7 +455,7 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
         if (p.ySpeed < MIN_BOUNCE_SPEED && p.ySpeed > -MIN_BOUNCE_SPEED) p.ySpeed = reverse ? -MIN_BOUNCE_SPEED : MIN_BOUNCE_SPEED;
         break;
       }
-      if (yStep < 0 || (reverse && yStep > 0)) p.ySpeed = reverse ? -ROOF_COLLISION_SPEED : ROOF_COLLISION_SPEED;
+      if (yStep < 0 || (reverse && yStep > 0)) p.ySpeed = reverse ? -ROOF_COLLISION_SPEED : -(p.ySpeed >> 1);
     }
   }
   // Falling off a slope: about 1/3 gravity, so the ball accelerates
@@ -483,43 +504,16 @@ export function playerUpdate(p: Player, lvl: LevelData, hooks: PhysicsHooks) {
       // climbing. Trying up first lifts it off the surface each step.
       const downDir = reverse ? -1 : 1;
       let diagMoved = false;
-      // Larger diagonals clear a stair riser when pressing into a
-      // slope (start-pit walls), so Left/Right climbs without jump.
+      // Probes again: PROBE_HOOKS + probe keeps spikes/pickups/exit in these
+      // feasibility checks from firing their real side effects.
       for (const d of [1, 2, 3, 6]) {
         p.xSpeed = probeXs; p.ySpeed = probeYs;
-        if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos + downDir * d, hooks, false)) { p.xPos += xStep; p.yPos += downDir * d; diagMoved = true; break; }
+        if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos + downDir * d, PROBE_HOOKS, true)) { p.xPos += xStep; p.yPos += downDir * d; diagMoved = true; break; }
         p.xSpeed = probeXs; p.ySpeed = probeYs;
-        if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos - downDir * d, hooks, false)) { p.xPos += xStep; p.yPos -= downDir * d; diagMoved = true; break; }
+        if (collisionDetection(p, lvl, p.xPos + xStep, p.yPos - downDir * d, PROBE_HOOKS, true)) { p.xPos += xStep; p.yPos -= downDir * d; diagMoved = true; break; }
       }
       if (diagMoved) { p.xSpeed = probeXs; p.ySpeed = probeYs; }
       else p.xSpeed = -(probeXs >> 1);
-    }
-  }
-
-  // Slope watchdog: a ball whose centre is on a ramp tile but whose
-  // position hasn't changed for ~1s is wedged (tip / pocket / riser
-  // where every 1px diagonal still overlaps). Nudge it to the nearest
-  // free spot so it rolls down on its own; Left/Right input then
-  // accelerates it or climbs. Flat/valley rest (centre not on a ramp)
-  // is left alone.
-  {
-    const ctx2 = Math.floor(p.xPos / TILE_SIZE), cty2 = Math.floor(p.yPos / TILE_SIZE);
-    const centreId = (ctx2 >= 0 && ctx2 < lvl.width && cty2 >= 0 && cty2 < lvl.height) ? (tileRawAt(lvl, ctx2, cty2) & TILE_ID_MASK) : 0;
-    const onSlope = centreId >= 30 && centreId <= 37;
-    if (onSlope && p.lastSlopeX === p.xPos && p.lastSlopeY === p.yPos) {
-      p.slopeStuckCntr = (p.slopeStuckCntr || 0) + 1;
-    } else {
-      p.slopeStuckCntr = 0;
-    }
-    p.lastSlopeX = p.xPos; p.lastSlopeY = p.yPos;
-    if (onSlope && (p.slopeStuckCntr || 0) > 30) {
-      const oldX = p.xPos;
-      if (findFreeSpot(p, lvl)) {
-        p.xSpeed = p.xPos > oldX ? MIN_BOUNCE_SPEED : (p.xPos < oldX ? -MIN_BOUNCE_SPEED : 0);
-        p.ySpeed = MIN_BOUNCE_SPEED;
-        p.mGroundedFlag = false;
-      }
-      p.slopeStuckCntr = 0;
     }
   }
 }

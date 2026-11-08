@@ -130,6 +130,8 @@ export class Renderer {
   camInitialized = false;
   screenShake = 0;
   animTime = 0;
+  lastFrameTime = 0;
+  lastLayoutKey = '';
 
   // Ball Visual Physics
   lastPlayerX = 0;
@@ -159,9 +161,20 @@ export class Renderer {
     this.rh = this.app.renderer.height;
     this.viewW = vs.viewW;
     this.viewH = vs.viewH;
-    this.effScale = Math.min(this.rw / vs.viewW, this.rh / vs.viewH);
+    // Reserve the top HUD bar and the bottom strip the D-pad overlays, so the
+    // centered game view never slides under either (gesture mode has no D-pad:
+    // reserve 0).
+    const HUD_H = Math.max(34, Math.round(this.rh * 0.0625));
+    let reserve = 0;
+    const dpad = document.getElementById('dpad-controls');
+    if (dpad && !dpad.hidden && this.holderEl) {
+      const dr = dpad.getBoundingClientRect();
+      const hr = this.holderEl.getBoundingClientRect();
+      reserve = Math.max(0, Math.min(dr.bottom, hr.bottom) - Math.max(dr.top, hr.top));
+    }
+    this.effScale = Math.min(this.rw / vs.viewW, (this.rh - HUD_H - reserve) / vs.viewH);
     this.offsetX = (this.rw - vs.viewW * this.effScale) / 2;
-    this.offsetY = (this.rh - vs.viewH * this.effScale) / 2;
+    this.offsetY = HUD_H + (this.rh - HUD_H - reserve - vs.viewH * this.effScale) / 2;
     this.lastHudKey = '';
     this.lastUiKey = '';
     this.lastToastMsg = '';
@@ -321,7 +334,14 @@ export class Renderer {
   }
 
   renderFrame() {
-    this.animTime += 0.03;
+    const now = performance.now();
+    if (this.lastFrameTime === 0) this.lastFrameTime = now;
+    const deltaMs = Math.min(100, Math.max(0, now - this.lastFrameTime));
+    this.lastFrameTime = now;
+    // Effects are tuned for 30Hz logic ticks; scale by real frame time
+    // so they run at the same speed on 60/120/144Hz displays.
+    const dtScale = Math.min(3, Math.max(0, deltaMs / 33.333));
+    this.animTime += 0.03 * dtScale;
     const g = this.game;
     const inGame = g.state === 'game' && !!g.level;
 
@@ -329,11 +349,17 @@ export class Renderer {
     this.uiRoot.visible = !inGame;
 
     if (inGame && g.level) {
+      // Gameplay frames carry no menu tap regions.
+      this.hitRects.length = 0;
       const lvl = g.level;
       g.calcCamera();
 
-      // Smooth camera lerp tracking
-      if (!this.camInitialized) {
+      // Smooth camera lerp tracking. The camera cuts on level start and
+      // respawn: game.ts flags those events (camSnap) since its camInit reset
+      // is consumed by its own calcCamera within the same tick and never
+      // observable here.
+      if (!this.camInitialized || g.camSnap) {
+        g.camSnap = false;
         this.smoothCamX = g.camX;
         this.smoothCamY = g.camY;
         this.camInitialized = true;
@@ -347,11 +373,14 @@ export class Renderer {
       if (this.screenShake > 0.1) {
         shakeX = (Math.random() - 0.5) * this.screenShake;
         shakeY = (Math.random() - 0.5) * this.screenShake;
-        this.screenShake *= 0.86;
+        this.screenShake *= Math.pow(0.86, dtScale);
       }
 
       const vs = getViewSize();
-      if (vs.viewW !== this.viewW || vs.viewH !== this.viewH) this.resizeToHolder();
+      // Re-fit when the D-pad appears/changes size (control mode or state
+      // switch), not only on window resizes.
+      const layoutKey = `${g.controlMode}:${g.state}`;
+      if (layoutKey !== this.lastLayoutKey || vs.viewW !== this.viewW || vs.viewH !== this.viewH) this.resizeToHolder();
       const effScale = this.effScale;
       this.gameLayer.scale.set(effScale, effScale);
       this.gameLayer.position.set(
@@ -376,7 +405,7 @@ export class Renderer {
         this.hideToast();
       }
 
-      this.particles.update();
+      this.particles.update(dtScale);
       this.particles.draw();
     } else {
       this.camInitialized = false;
@@ -389,7 +418,7 @@ export class Renderer {
 
   drawDynamic(lvl: LevelData) {
     let h = 0;
-    for (let i = 0; i < lvl.tiles.length; i += 7) h = (h * 31 + lvl.tiles[i]) | 0;
+    for (let i = 0; i < lvl.tiles.length; i++) h = (h * 31 + lvl.tiles[i]) | 0;
     h = (h * 31 + this.game.exitOffset) | 0;
     const key = `${h}`;
     if (key === this.lastDynKey) return;
@@ -498,8 +527,8 @@ export class Renderer {
         continue;
       }
 
-      // Square steel body
-      const half = 8;
+      // Square steel body (full 24x24 collision box)
+      const half = 12;
       g.rect(cx - half, cy - half, half * 2, half * 2).fill(0x212121);
       g.rect(cx - half + 1.5, cy - half + 1.5, (half - 1.5) * 2, (half - 1.5) * 2)
         .stroke({ width: 1.2, color: 0xd32f2f });
@@ -514,7 +543,7 @@ export class Renderer {
         const a = (Math.PI / 4) * i;
         const ca = Math.cos(a), sa = Math.sin(a);
         const rb = half / Math.max(Math.abs(ca), Math.abs(sa));
-        const rt = Math.min(rb + (i % 2 === 0 ? 3.5 : 0.8), 12);
+        const rt = Math.min(rb + (i % 2 === 0 ? 3.5 : 0.8), 16);
         const bx = cx + ca * rb, by = cy + sa * rb;
         const tipX = cx + ca * rt, tipY = cy + sa * rt;
         const p1x = bx - sa * 2, p1y = by + ca * 2;
@@ -981,7 +1010,7 @@ export class Renderer {
         this.splashBallGfx.y = ballBounceY;
         return;
       }
-      this.lastUiKey = `splash:${Math.round(this.rw)}x${Math.round(this.rh)}:${Math.round(S * 100)}`;
+      this.lastUiKey = 'splash';
       ui.removeChildren();
       const bg = new PIXI.Graphics();
       bg.rect(0, 0, this.rw, this.rh).fill(0x0c102b);
@@ -1016,7 +1045,7 @@ export class Renderer {
 
     this.splashBallGfx = null;
     const S = this.us();
-    const uiKey = `${g.state}:${g.menuSel}:${g.selectedLevel}:${g.instructionPage}:${g.settingsSel}:${g.chooseSel}:${g.controlMode}:${Math.round(S * 100)}`;
+    const uiKey = `${g.state}:${g.menuSel}:${g.selectedLevel}:${g.instructionPage}:${g.settingsSel}:${g.chooseSel}:${g.controlMode}:${g.savedInProgress ? 1 : 0}:${Math.round(S * 100)}`;
     if (this.lastUiKey === uiKey) return;
     this.lastUiKey = uiKey;
 

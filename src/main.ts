@@ -15,6 +15,7 @@ async function boot() {
   await renderer.init(holder);
   await audio.init();
   window.addEventListener('pointerdown', () => audio.unlock(), { once: false });
+  window.addEventListener('keydown', () => audio.unlock(), { once: false });
 
   // preload level 1 into cache
   await game.ensureLevel(1);
@@ -25,8 +26,15 @@ async function boot() {
   new GestureController(gestureLayer, input, pauseBadge, (x, y) => renderer.hitTest(x, y));
   const dpadControls = document.getElementById('dpad-controls')!;
   const dpJump = document.getElementById('dp-jump')!;
+  let lastSyncControl = '';
+  let lastSyncState = '';
+  let lastSyncCoarse = false;
   function syncControlUI() {
     const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    if (game.controlMode === lastSyncControl && game.state === lastSyncState && coarse === lastSyncCoarse) return;
+    lastSyncControl = game.controlMode;
+    lastSyncState = game.state;
+    lastSyncCoarse = coarse;
     document.body.dataset.control = game.controlMode;
     pauseBadge.classList.toggle('visible', game.state === 'game' && (coarse || game.controlMode === 'dpad'));
     dpadControls.hidden = game.controlMode !== 'dpad';
@@ -46,14 +54,18 @@ async function boot() {
   const tutSkip = document.getElementById('tut-skip')!;
   const isCoarse = () => window.matchMedia?.('(pointer: coarse)').matches ?? false;
   let tutStep = -1;
+  let tutMode: string = game.controlMode;
+  const tutSeen: Record<string, boolean> = {};
   const tutKey = () => `bounce_tut_seen_${game.controlMode}`;
-  const isTutDone = () => {
-    try { return localStorage.getItem(tutKey()) === '1'; } catch { return false; }
-  };
+  function loadTutSeen() {
+    try { tutSeen[tutKey()] = localStorage.getItem(tutKey()) === '1'; } catch { tutSeen[tutKey()] = false; }
+  }
+  loadTutSeen();
   function tutFinish() {
     tutStep = -1;
     tutEl.hidden = true;
     try { localStorage.setItem(tutKey(), '1'); } catch { /* ignore */ }
+    tutSeen[tutKey()] = true;
   }
   function tutSteps() {
     return game.controlMode === 'dpad'
@@ -78,7 +90,8 @@ async function boot() {
   }
   tutSkip.addEventListener('click', tutFinish);
   function tutorialTick() {
-    if (isTutDone() || (!isCoarse() && game.controlMode !== 'dpad')) return;
+    if (game.controlMode !== tutMode) { tutMode = game.controlMode; loadTutSeen(); }
+    if (tutSeen[tutKey()] || (!isCoarse() && game.controlMode !== 'dpad')) return;
     if (tutStep === -1) {
       if (game.state === 'game') tutShow(0);
       return;
@@ -95,12 +108,14 @@ async function boot() {
   const FIXED = 30;
   let acc = 0, last = performance.now();
 
-  function pollMenus() {
+  let splashMs = 0;
+  const SPLASH_MS = 4500; // ~150 ticks at 30ms in the original frame-count logic
+  function pollMenus(dt: number) {
     const st = game.state;
     if (st === 'splash') {
-      game.splashT++;
-      if (input.consumePressed(BTN.Cross) || input.consumePressed(BTN.Start) || input.consumePressed(BTN.Up) || game.splashT > 200) {
-        game.state = 'menu'; game.splashT = 0;
+      splashMs += dt;
+      if (input.consumePressed(BTN.Cross) || input.consumePressed(BTN.Start) || input.consumePressed(BTN.Up) || splashMs >= SPLASH_MS) {
+        game.state = 'menu'; splashMs = 0;
       }
       return;
     }
@@ -187,7 +202,7 @@ async function boot() {
       if (steps === 4) acc = 0;
       if (steps > 0) input.endFrame();
     } else {
-      pollMenus();
+      pollMenus(dt);
       acc = 0;
       input.endFrame();
     }
@@ -197,4 +212,13 @@ async function boot() {
   requestAnimationFrame(frame);
 }
 
-void boot();
+boot().catch((err) => {
+  console.error('boot failed:', err);
+  const target = document.getElementById('canvas-holder') ?? document.body;
+  const el = document.createElement('div');
+  el.textContent = 'This game needs WebGL to run. Please try a different browser.';
+  el.style.cssText =
+    'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;' +
+    'padding:24px;text-align:center;color:#eee;background:#111;font:16px/1.5 system-ui,sans-serif;';
+  target.appendChild(el);
+});

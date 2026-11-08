@@ -73,12 +73,13 @@ let ctx: AudioContext | null = null;
 function ac(): AudioContext | null {
   try {
     if (!ctx) ctx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-    if (ctx.state === 'suspended') void ctx.resume();
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     return ctx;
   } catch { return null; }
 }
 function playNotes(notes: Note[]) {
   const c = ac(); if (!c || notes.length === 0) return;
+  if (c.state !== 'running') return;
   let t = c.currentTime + 0.01;
   for (const n of notes) {
     const f = toneFreq(n.tone, n.scale);
@@ -102,7 +103,7 @@ export const audio = {
   pickup: new OttVoice('pickup.ott'),
   pop: new OttVoice('pop.ott'),
   async init() { await Promise.all([this.hoop.load(), this.pickup.load(), this.pop.load()]); },
-  unlock() { ac(); },
+  unlock() { if (ctx && ctx.state === 'running') return; ac(); },
   playHoop() { playNotes(this.hoop.notes.length ? this.hoop.notes : [{ tone: 8, length: 3, scale: 1, bpm: 300 }]); },
   playPickup() { playNotes(this.pickup.notes.length ? this.pickup.notes : [{ tone: 5, length: 3, scale: 1, bpm: 300 }]); },
   playPop() { playNotes(this.pop.notes.length ? this.pop.notes : [{ tone: 3, length: 2, scale: 0, bpm: 140 }]); },

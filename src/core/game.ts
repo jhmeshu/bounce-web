@@ -10,7 +10,6 @@ export type GameState = 'splash' | 'menu' | 'levelselect' | 'game' | 'highscore'
 
 export class Game {
   state: GameState = 'splash';
-  splashT = 0;
   menuSel = 1; // 0 continue,1 new,2 levels,3 scores,4 help,5 settings
   selectedLevel = 1;
   controlMode: ControlMode = 'gesture';
@@ -26,7 +25,10 @@ export class Game {
   bestLevel = 1; bestScore = 0;
   exitOffset = 0; exitState: 'closed' | 'waiting' | 'opening' | 'open' = 'closed';
   respawn = { x: 0, y: 0 };
+  respawnSize: SizeState = SizeState.Small;
   camX = 0; camY = 0; camInit = false;
+  // Set on start/respawn; the renderer snaps (instead of lerping) and clears it.
+  camSnap = false;
   jumpBuffer = 0;
   levelCache = new Map<number, LevelData>();
   hooks: PhysicsHooks;
@@ -98,8 +100,10 @@ export class Game {
     if (fresh) { this.score = 0; this.numLives = 3; this.newBest = false; this.savedInProgress = true; }
     this.exitOffset = 0; this.exitState = 'closed';
     this.respawn = { x: lvl.startTileX, y: lvl.startTileY };
+    this.respawnSize = lvl.ballSize === 0 ? SizeState.Small : SizeState.Large;
     playerInit(this.player, lvl.startPosX, lvl.startPosY, lvl.ballSize === 0 ? SizeState.Small : SizeState.Large, lvl);
     this.camInit = false;
+    this.camSnap = true;
     this.jumpBuffer = 0;
     this.state = 'game';
   }
@@ -108,6 +112,9 @@ export class Game {
     // deactivate old: 7 -> 8
     setTileId(this.level, this.respawn.x, this.respawn.y, 8);
     this.respawn = { x, y };
+    // Respawn at the size captured when the gem was collected (f.java stores
+    // ballSize at pickup), not whatever size the ball has when it later dies.
+    this.respawnSize = this.player.sizeState;
     setTileId(this.level, x, y, 8);
     this.score += GEM_POINTS;
     audio.playPickup();
@@ -135,6 +142,10 @@ export class Game {
     this.onEffect?.('hoop', x * TILE_SIZE + 6, y * TILE_SIZE + 6);
   }
   completeLevel() {
+    // One award per level: the open exit doesn't block movement, so each 1px
+    // sub-step probe of the crossing frame reaches the exit tile — without a
+    // guard, falling onto it scored +5000 per probe and persisted the sum.
+    if (this.state !== 'game') return;
     this.score += EXIT_POINTS;
     this.saveRecords();
     this.state = 'complete';
@@ -151,7 +162,12 @@ export class Game {
     let cx = this.player.xPos - viewW / 2;
     if (!this.camInit) { this.camY = this.player.yPos - gameH / 2; this.camInit = true; }
     if (!this.isLevelSmall()) {
-      const top = Math.floor(gameH * 0.30), bottom = gameH - top;
+      // Portrait touch view: keep the ball near the vertical middle (the
+      // D-pad overlays the bottom of the screen there, so a low ball and the
+      // stage under it disappear behind the buttons). Desktop and landscape
+      // keep the original 30/70 window.
+      const top = Math.floor(gameH * (viewW < viewH ? 0.45 : 0.30));
+      const bottom = gameH - top;
       const sy = this.player.yPos - this.camY;
       if (sy < top) this.camY = this.player.yPos - top;
       else if (sy > bottom) this.camY = this.player.yPos - bottom;
@@ -201,10 +217,11 @@ export class Game {
       if (this.numLives < 0) {
         this.saveRecords(); this.savedInProgress = false; this.state = 'gameover';
       } else {
-        const sz = this.player.sizeState;
+        const sz = this.respawnSize;
         const half = sz === SizeState.Small ? 6 : 8;
         playerInit(this.player, this.respawn.x * TILE_SIZE + half, this.respawn.y * TILE_SIZE + half, sz, this.level);
         this.camInit = false;
+        this.camSnap = true;
         this.jumpBuffer = 0;
         inp.resetEdges();
       }
@@ -220,25 +237,6 @@ export class Game {
     // cheat L+R: Q+E or holding R(E) + pressing L(Q)
     if (inp.consumePressed(BTN.L) && inp.held(BTN.R)) { this.invincible = !this.invincible; audio.playHoop(); }
     if (inp.consumePressed(BTN.Start)) { this.savedInProgress = true; this.state = 'menu'; if (this.menuSel === 0 && !this.savedInProgress) this.menuSel = 1; }
-  }
-  updateVariable() {
-    const inp = this.input;
-    const menuCount = 5;
-    const canContinue = this.savedInProgress;
-    switch (this.state) {
-      case 'splash':
-        this.splashT++;
-        if (inp.consumePressed(BTN.Cross) || inp.consumePressed(BTN.Start) || this.splashT > 150) { this.state = 'menu'; this.splashT = 0; }
-        break;
-      case 'menu': {
-        if (this.menuSel === 0 && !canContinue) this.menuSel = 1;
-        // up/down
-        if (inp.consumePressed(1 satisfies number as number) || (inp as unknown as { pressedNow: (b: number) => boolean }).pressedNow(BTN.Left)) { /* noop */ }
-        break;
-      }
-      default: break;
-    }
-    void menuCount;
   }
   menuNav(up: boolean, down: boolean, select: boolean) {
     if (this.menuSel === 0 && !this.savedInProgress) this.menuSel = 1;

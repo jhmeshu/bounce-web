@@ -130,27 +130,29 @@ export class ParticleSystem {
     });
   }
 
-  update() {
+  /** dtScale: 1.0 at the tuned 30Hz frame rate; scales lifetimes and motion. */
+  update(dtScale = 1) {
     const alive: Particle[] = [];
     for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
-      p.life++;
+      p.life += dtScale;
       if (p.life >= p.maxLife) continue;
 
-      p.x += p.vx;
-      p.y += p.vy;
+      p.x += p.vx * dtScale;
+      p.y += p.vy * dtScale;
 
       if (p.type === 'splash' || p.type === 'pop') {
-        p.vy += 0.12; // gravity
+        p.vy += 0.12 * dtScale; // gravity
       } else if (p.type === 'bubble') {
-        p.vx += Math.sin(p.life * 0.2) * 0.08;
+        p.vx += Math.sin(p.life * 0.2) * 0.08 * dtScale;
       } else if (p.type === 'dust') {
-        p.vx *= 0.92;
-        p.vy *= 0.92;
+        const damp = Math.pow(0.92, dtScale);
+        p.vx *= damp;
+        p.vy *= damp;
       }
 
       if (p.vRot !== undefined && p.rotation !== undefined) {
-        p.rotation += p.vRot;
+        p.rotation += p.vRot * dtScale;
       }
 
       p.alpha = Math.max(0, 1 - p.life / p.maxLife);
