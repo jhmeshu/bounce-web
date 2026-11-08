@@ -70,18 +70,35 @@ html, body {
   margin-top: 12px;
 }
 
-.tc-left, .tc-middle, .tc-right {
+.tc-dpad, .tc-middle, .tc-right {
   display: flex;
   gap: 16px;
   align-items: center;
 }
 
 /* Pause in the middle: side groups flex equally so the centre
-   group (pause, plus Up/Down in menus) is truly centred. */
-.tc-left {
+   group (pause) is truly centred. */
+.tc-dpad {
   flex: 1 1 0;
   justify-content: flex-start;
+  /* Menu D-pad cross: Up top, Left/Right middle, Down bottom.
+     Empty centre + hidden Up/Down collapse the grid, so in game
+     the D-pad is just the Left/Right row. */
+  display: grid;
+  grid-template-areas:
+    ". up ."
+    "left mid right"
+    ". down .";
+  grid-template-columns: auto auto auto;
+  grid-template-rows: auto auto auto;
+  justify-items: center;
+  align-items: center;
+  gap: 4px;
 }
+.dpad-up { grid-area: up; }
+#btn-left { grid-area: left; }
+#btn-right { grid-area: right; }
+.dpad-down { grid-area: down; }
 .tc-middle {
   flex: 0 0 auto;
   justify-content: center;
@@ -116,10 +133,12 @@ html, body {
 #touch-controls.is-menu #btn-jump {
   font-size: clamp(11px, 3.2vw, 15px);
 }
-#touch-controls.is-menu .tc-left,
 #touch-controls.is-menu .tc-middle,
 #touch-controls.is-menu .tc-right {
   gap: 8px;
+}
+#touch-controls.is-menu .tc-dpad {
+  gap: 4px;
 }
 
 #touch-controls button {
@@ -207,7 +226,7 @@ html, body {
     margin-top: 12px;
   }
 
-  .tc-left, .tc-right {
+  .tc-dpad, .tc-right {
     gap: 16px;
   }
 
@@ -292,7 +311,7 @@ html, body {
     padding: 0;
   }
 
-  .tc-left, .tc-right {
+  .tc-dpad, .tc-right {
     gap: 16px;
   }
 
@@ -405,12 +424,25 @@ html, body {
 
 /* Small phones: keep buttons large, only tighten the inner gap */
 @media (max-width: 360px) {
-  .tc-left, .tc-right {
+  .tc-right {
     gap: 10px;
   }
   #touch-controls button {
     width: 68px;
     height: 60px;
     font-size: 24px;
+  }
+}
+
+/* D-pad cross stays tight in every layout */
+.tc-dpad {
+  gap: 4px;
+}
+
+/* Landscape menu: D-pad is 3 buttons tall, shrink it to fit */
+@media (orientation: landscape) and (pointer: coarse) {
+  #touch-controls.is-menu button {
+    width: 56px;
+    height: 48px;
   }
 }
